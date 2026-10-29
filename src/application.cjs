@@ -240,7 +240,8 @@ async function onMessage(msg) {
       if(!r.ok)fail("AUTHORIZATION_FAILED");
       result=r.result;await onboarding.authenticate(result.appId);connectionAuthenticated=true;await onboarding.inspect();
     }
-    else if (msg.tool === "get_task" || msg.tool === "inspect_delivery") result = b.task(args.id);
+    else if (msg.tool === "get_task") result = b.task(args.id);
+    else if (msg.tool === "inspect_delivery") result = await b.inspectExecution(args.id);
     else if(msg.tool==='get_source_attachment'){
       const t=Object.values(b.state.tasks).find(t=>t.bindingId===args.bindingId);
       if(!t)fail('TASK_NOT_FOUND');if(t.targetTaskId!==args.session_context?.session_id)fail('SESSION_MISMATCH');if(t.generation!==args.generation)fail('STALE_GENERATION');

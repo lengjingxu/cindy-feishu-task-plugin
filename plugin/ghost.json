@@ -55,7 +55,7 @@
     },
     {
       "name": "inspect_delivery",
-      "description": "查看保存的投递回执；未知结果不重发。",
+      "description": "按保存的 requestKey 查询 Host 持久执行回执，核对伙伴和任务后恢复丢失的投递响应；不重发。自然终态仅保存证据，不代表飞书结果或产物已回报完成。",
       "parameters": {
         "type": "object",
         "properties": {

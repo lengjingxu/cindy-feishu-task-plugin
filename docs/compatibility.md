@@ -55,3 +55,9 @@
 没有执行真实安装、扫码、上传或伙伴闭环。本阶段未生成 .cindy，故无安装包校验值。新增工具和 setup.requires=[] 让无凭据的支持检查可被发现，业务动作仍保留自身认证/授权检查；未增加文件、网络、Node 或伙伴权限。
 
 0.15.5 当时保留测试适配器声明；0.15.6 已删除全部 secretBindings/saveMethods/settingsMethod，仍保留等待联调的 agent.delegation。这些不是正式版已实现能力，也不授予权限。inspect_host_support 只探测入口，不调用或验证 scoped execution/settled。
+
+## 配套 Host 执行回执接入
+
+插件 inspect_delivery 已接入配套源码 2cede009a3（合并 upstream 后 5da63da932）的 targets.get({requestKey})。只有 delegation.receiptQuery=true、settled=true 时查询，校验 requestKey、target、executionId、taskId。accepted 可恢复丢失的投递响应；not found/pending 均不重发。自然终态保存 executionReceipt，不把 completed、failed、interrupted 或 cancelled 当作飞书结果已经交付，不修改 needs_input 或产物回报状态。原撤回待核验任务只有同一执行可信 settled 才释放占位。
+
+现有 authenticatedFetch 上传与 targets.send 委派参数已核对配套源码，未变更。原 dir_deposit 必须使用本次真实 callId，不能跨调用复用。新增回执测试使用模拟 Host；此处不是正式版安装兼容或真实伙伴执行验收。
