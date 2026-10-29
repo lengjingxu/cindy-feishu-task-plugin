@@ -1,0 +1,7 @@
+const {test}=require('node:test');const assert=require('node:assert/strict');const crypto=require('node:crypto');const {Journal}=require('../src/journal.cjs');
+const hash=async s=>crypto.createHash('sha256').update(s).digest('hex');
+function fixture(){const files=new Map();let failWrite=false;const fs=async r=>{if(r.op==='read')return files.has(r.path)?{ok:true,content:files.get(r.path)}:{ok:false,errorCode:'NOT_FOUND'};if(failWrite)throw Error('disk');files.set(r.path,r.content);return{ok:true}};return{files,fs,j:new Journal(fs,hash),fail:()=>{failWrite=true}};}
+test('新账本必须显式初始化，重启恢复哈希链',async()=>{const f=fixture();await assert.rejects(f.j.load(),e=>e.code==='LEDGER_NOT_INITIALIZED');await f.j.initialize();await f.j.save({version:1,revision:1,value:'persisted'});const j=new Journal(f.fs,hash);assert.equal((await j.load()).value,'persisted');});
+test('破损账本拒绝，不回退旧记录或重置',async()=>{const f=fixture();await f.j.initialize();await f.j.save({version:1,revision:1});f.files.set('ledger/r000001.json','torn');await assert.rejects(new Journal(f.fs,hash).load());assert.equal(f.files.size,2);});
+test('写入超时后禁止继续写入直到重启对账',async()=>{const f=fixture();await f.j.initialize();f.fail();await assert.rejects(f.j.save({}));await assert.rejects(f.j.save({}),e=>e.code==='STORAGE_RESTART_REQUIRED');});
+test('未知Host读取形状拒绝，不当作空账本',async()=>{const j=new Journal(async()=>({ok:false,message:'not found'}),hash);await assert.rejects(j.initialize(),e=>e.code==='STORAGE_UNAVAILABLE');});
