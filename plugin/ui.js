@@ -56,7 +56,7 @@ function render(){
   }else if(view.needsInitialization){
    content='<h3>添加飞书应用</h3>'+button('开始设置','initialize');
   }else if(onboarding.identity?.state!=='verified'){
-   content='<h3>添加飞书应用</h3>'+(view.hostServicesAvailable?button('绑定飞书应用','bind'):'<p role="status">请更新 Cindy 后绑定应用</p>');
+   content='<h3>添加飞书应用</h3>'+(view.hostServicesAvailable?button('绑定飞书应用','bind'):'<p role="status">当前 Cindy 缺少此插件的绑定接口</p>');
   }else if(!binding.partnerId||editingPartner){
    content='<h3>关联处理伙伴</h3><label>处理伙伴<select id="connection-partner">'+options()+'</select></label><div class="actions">'+button('保存执行伙伴','select-partner')+'</div>';
   }else if(onboarding.permissions?.state==='verified' && onboarding.registration?.state!=='verified' && onboarding.registration?.runtime?.state!=='verified'){
@@ -92,7 +92,8 @@ async function bindFromSettings(){
  let saved=false;
  try{
   const r=await fetch('/node-authorization/'+key,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({...appArgs(),credentialKey:key,...(context.appId?{appId:context.appId}:{})}),signal:control.signal});
-  if(!r.ok||!r.headers.get('content-type')?.includes('application/x-ndjson'))throw new Error('当前客户端不支持设置页绑定，请更新 Cindy。');
+  if(!r.ok)throw new Error(r.status===404?'当前 Cindy 缺少此插件的绑定接口。':'应用绑定请求失败（HTTP '+r.status+'）。');
+  if(!r.headers.get('content-type')?.includes('application/x-ndjson'))throw new Error('应用绑定响应格式不受支持。');
   const reader=r.body.getReader(), decoder=new TextDecoder();let buffer='';
   for(;;){
    const part=await reader.read();if(part.done)break;buffer+=decoder.decode(part.value,{stream:true});

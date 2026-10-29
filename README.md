@@ -14,9 +14,9 @@
 
 ## 当前发行
 
-**0.15.2 为工程预览版，尚未在 Cindy 插件市场上架。**
+**0.15.3 为工程预览版，尚未在 Cindy 插件市场上架。**
 
-当前已验证的运行环境是包含通用认证与伙伴委派扩展的 Cindy 测试构建。官方 `v0.1.119` 尚不满足这些接口要求，普通正式版用户请等待兼容版本。清单中的 `minCindyVersion: 0.1.118` 是现有格式基线，不代表该正式版本能运行完整流程；正式上架前必须替换为实际验证通过的最低版本。见 [兼容性](docs/compatibility.md)。
+当前已验证的运行环境是包含通用认证与伙伴委派扩展的 Cindy 测试构建。官方 `v0.1.119`、`v0.1.120-beta` 及本次核验的 `0.1.120` 安装构建尚不满足这些接口要求，普通正式版用户请等待兼容版本。清单中的 `minCindyVersion: 0.1.118` 是现有格式基线，不代表该正式版本能运行完整流程；正式上架前必须替换为实际验证通过的最低版本。见 [兼容性](docs/compatibility.md)。
 
 [下载预览安装包](https://github.com/lengjingxu/cindy-feishu-task-plugin/releases) · [Cindy](https://github.com/makecindy/cindy)
 
