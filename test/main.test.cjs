@@ -124,3 +124,12 @@ test('批量名称在途时添加应用不会读取未初始化运行时，下�
  const first=h.ui('state');await waiting;await h.ui('add-application');release();
  assert.equal((await first).ok,true);const s=await h.ui('state');assert.equal(s.ok,true);assert.equal(s.result.applications.length,2);assert.equal(s.result.applications[1].appProfile.name,'应用 account2');
 });
+
+test('支持检查直接走无凭据Node方法，不冒充完整工作流已验证',async()=>{
+ const replies=[],calls=[];let receiver;
+ class Channel{postMessage(){}}
+ const cindy={fs:async()=>({ok:false,errorCode:'NOT_FOUND'}),targets:{list(){throw Error('must not list targets')}},node:{request:async r=>{calls.push(r);assert.equal(r.method,'runtime/capabilities');return{ok:true,result:{version:1,authorization:true,hostServicesEntry:false,childSpawn:true}};}},onHostMessage:fn=>{receiver=fn},send:async r=>replies.push(r)};
+ vm.runInNewContext(fs.readFileSync('plugin/main.js','utf8'),{cindy,BroadcastChannel:Channel,crypto:webcrypto,TextEncoder,Uint8Array,console});
+ await receiver({type:'tool-call',tool:'inspect_host_support',callId:'inspect',args:{}});
+ assert.equal(calls.length,1);assert.equal(replies[0].ok,true);assert.equal(replies[0].result.scopedDelegationProbe,false);assert.equal(replies[0].result.fullWorkflowVerified,false);assert.equal(replies[0].result.node.hostServicesEntry,false);
+});

@@ -1,0 +1,92 @@
+{
+  "version": "0.1.120",
+  "source": {
+    "sourceCommit": "b3dd8436228135aa8be9827d204e4e5eaf9316b4",
+    "builtAt": "2026-10-29T00:19:45.253+08:00"
+  },
+  "scope": "Installed code and plugin worker in isolated VM + static shipped documentation; no live IPC, credentials, network or real tasks",
+  "pluginWorkerProbe": {
+    "version": 1,
+    "authorization": true,
+    "hostServicesEntry": false,
+    "childSpawn": true
+  },
+  "publicPreload": {
+    "targets": [
+      "list",
+      "resolve",
+      "send",
+      "cancel"
+    ],
+    "tasks": [
+      "capabilities",
+      "models",
+      "setModel",
+      "requestWriteAccess",
+      "startTeam",
+      "getTeam",
+      "setTeamPlan",
+      "releaseWorker",
+      "create",
+      "list",
+      "get",
+      "send",
+      "getRun",
+      "listRuns",
+      "cancel",
+      "readMessages",
+      "setHidden"
+    ],
+    "fetch": true,
+    "fs": true,
+    "node": true
+  },
+  "nodeBootstrap": [
+    "spawnEntry",
+    "bindDeviceAuthorization",
+    "bindAuthorization"
+  ],
+  "staticIndicators": {
+    "saveMethods": false,
+    "settingsMethod": false,
+    "bindHostServices": false,
+    "nodeAuthorizationRoute": false,
+    "uploadDir": true,
+    "secretBindings": true,
+    "cancelWarning": true
+  },
+  "fingerprints": {
+    ".vite/build/ghostPreload.js": {
+      "bytes": 3111,
+      "sha256": "7a06af14f4ae3906b0546b3591074ab4dcedbef9d7801476641819c73118b930"
+    },
+    ".vite/build/nodeRuntimeWorkerProcess.js": {
+      "bytes": 31497,
+      "sha256": "f7d8ddd227e0b3fdc48e80da543a494d9c9598c899d0b9d070e1ff855a877e0a"
+    },
+    ".vite/build/bootstrap-electron-BQG0kPOv.js": {
+      "bytes": 26576577,
+      "sha256": "fd59e869d676d181d98cb911210e536379d8f2756e2638af0166d71285b7d0c6"
+    },
+    "references/plugin-manifest.md": {
+      "bytes": 32755,
+      "sha256": "9931abaa5b697197bf5e922cd5d82ecb02fabffc65ba024732b353d3a87ee9c2"
+    },
+    "references/plugin-node-worker.md": {
+      "bytes": 19066,
+      "sha256": "ebebdde93f2094a6ba729dc5324fa3d2f8eb950f36d5c8449b4fb61d4f643084"
+    },
+    "references/plugin-network.md": {
+      "bytes": 29245,
+      "sha256": "189137d45a72a31f32a275772aaca8a776e9ca6a200c0d423fdc735945b886d0"
+    },
+    "references/plugin-files-and-library.md": {
+      "bytes": 15029,
+      "sha256": "48db2ee4f7b028b01ca719214683d5b3d01dec961b4b3c225847f9a4affc9244"
+    },
+    "references/plugin-agent-tasks.md": {
+      "bytes": 32479,
+      "sha256": "22044ffc8b82ab12bcacde4fcaf88951e17f4d22feaff947ffb24e60cf38056c"
+    }
+  }
+}
