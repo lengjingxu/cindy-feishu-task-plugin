@@ -1,7 +1,7 @@
 {
   "name": "feishu-task-bridge-author",
   "private": true,
-  "version": "0.15.3",
+  "version": "0.15.4",
   "scripts": {
     "build": "node scripts/build.cjs",
     "test": "node --test test/*.test.cjs",

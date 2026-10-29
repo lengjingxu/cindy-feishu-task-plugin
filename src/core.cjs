@@ -105,10 +105,10 @@ class Bridge {
     for(const t of Object.values(this.state.tasks))
       if(t.dispatch&&(t.orphanedDelivery||t.state==="cancel_check"))await this.cancel(t.id);
   }
-  async drain() {
+  async drain(shouldContinue = () => true) {
     await this.settleStopped();
     // dispatch() serializes reservation and send; a queued partner never silently changes.
-    for(const t of Object.values(this.state.tasks))if(['pending','scheduled'].includes(t.state)&&t.queuedTarget&&(!t.schedule?.notBefore||t.schedule.notBefore<=this.now())&&(!t.nextAttemptAt||t.nextAttemptAt<=this.now())){
+    for(const t of Object.values(this.state.tasks))if(shouldContinue()&&['pending','scheduled'].includes(t.state)&&t.queuedTarget&&(!t.schedule?.notBefore||t.schedule.notBefore<=this.now())&&(!t.nextAttemptAt||t.nextAttemptAt<=this.now())){
       try{await this.dispatch(t.id,t.queuedTarget);}catch(e){
         await this.serial(async()=>{const current=this.task(t.id);if(!['pending','scheduled'].includes(current.state))return;const n=clone(this.state);if(n.tasks[t.id].state==="scheduled"&&n.tasks[t.id].schedule?.notBefore<=this.now())n.tasks[t.id].state="pending";n.tasks[t.id].queueError=e.code||"QUEUE_DISPATCH_FAILED";if(e.code!=='TARGET_BUSY')n.tasks[t.id].nextAttemptAt=this.now()+60000;await this.save(n);});
       }

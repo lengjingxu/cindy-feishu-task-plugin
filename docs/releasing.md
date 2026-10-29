@@ -1,5 +1,7 @@
 # 独立发布
 
+> 0.15.4 当前仅为开发源码：未核实最低正式 Host 版本，Forge 实测因缺少 minCindyVersion 拒绝打包。以下流程须待正式契约及真实闭环验收后执行，不填占位版本绕过。
+
 1. 从最新 main 建分支；修改源码与必要测试。版本需同步 package.json、package-lock.json、plugin/ghost.json，并填写 releaseNotes。
 2. 运行 npm ci、npm run build、npm test、npm run test:ui。用 Cindy Forge 校验并打包 plugin 目录，确认包与构建内容一致。
 3. 检查已有 PR、最新远端 main 及可合并性；通过检查后合并 PR，本地同步 main。

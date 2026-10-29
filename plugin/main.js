@@ -265,9 +265,9 @@
           for (const t of Object.values(this.state.tasks))
             if (t.dispatch && (t.orphanedDelivery || t.state === "cancel_check")) await this.cancel(t.id);
         }
-        async drain() {
+        async drain(shouldContinue = () => true) {
           await this.settleStopped();
-          for (const t of Object.values(this.state.tasks)) if (["pending", "scheduled"].includes(t.state) && t.queuedTarget && (!t.schedule?.notBefore || t.schedule.notBefore <= this.now()) && (!t.nextAttemptAt || t.nextAttemptAt <= this.now())) {
+          for (const t of Object.values(this.state.tasks)) if (shouldContinue() && ["pending", "scheduled"].includes(t.state) && t.queuedTarget && (!t.schedule?.notBefore || t.schedule.notBefore <= this.now()) && (!t.nextAttemptAt || t.nextAttemptAt <= this.now())) {
             try {
               await this.dispatch(t.id, t.queuedTarget);
             } catch (e) {
@@ -1302,11 +1302,39 @@
         let listenerRun;
         let connectionAuthenticated = false;
         let draining = null;
+        let queueTimer;
+        function stopQueueTimer() {
+          if (queueTimer !== void 0) {
+            clearTimeout(queueTimer);
+            queueTimer = void 0;
+          }
+        }
+        function armQueueTimer() {
+          stopQueueTimer();
+          if (!receiving || testMode || !bridge) return;
+          const now = Date.now();
+          let due = Infinity;
+          for (const t of Object.values(bridge.state.tasks)) {
+            if (!["pending", "scheduled"].includes(t.state) || !t.queuedTarget || t.dispatch) continue;
+            const eligibleAt = Math.max(t.schedule?.notBefore || 0, t.nextAttemptAt || 0);
+            due = Math.min(due, eligibleAt > now ? eligibleAt : now + 6e4);
+          }
+          if (due === Infinity) return;
+          const delay = due > now ? Math.min(due - now, 6e4) : 6e4;
+          queueTimer = setTimeout(() => {
+            queueTimer = void 0;
+            tick().catch((e) => channel.postMessage({ type: "error", error: error(e) }));
+          }, delay);
+        }
         async function tick() {
           if (!receiving || testMode || !bridge) return;
-          if (!draining) draining = bridge.drain().finally(() => {
-            draining = null;
-          });
+          if (!draining) {
+            stopQueueTimer();
+            draining = bridge.drain(() => receiving && !testMode).then(() => channel.postMessage({ type: "changed" })).finally(() => {
+              draining = null;
+              armQueueTimer();
+            });
+          }
           return draining;
         }
         async function node(method, params, callId) {
@@ -1349,6 +1377,7 @@
             lease = new LeaseLoop(node, (state) => {
               if (state === "ended") {
                 receiving = false;
+                stopQueueTimer();
                 if (!["failed", "paused"].includes(listenerState)) listenerState = "gap_check";
               } else listenerState = state;
               channel.postMessage({ type: "changed" });
@@ -1435,10 +1464,11 @@
           listenerRun = lease.promise;
           try {
             await lease.waitReady();
-            await b.drain();
+            await tick();
           } catch (e) {
-            await lease.stop();
             receiving = false;
+            stopQueueTimer();
+            await lease.stop();
             listenerState = "failed";
             throw e;
           }
@@ -1506,7 +1536,7 @@
             for (const t of Object.values(b.state.tasks)) if (t.state === "dispatching" && t.id !== runner.run?.guid) await b.dispatch(t.id, t.dispatch.target);
             for (const t of Object.values(b.state.tasks)) if (t.id !== runner.run?.guid && ["writing", "write_failed", "write_uncertain", "write_blocked"].includes(t.state)) await b.reconcile(t.id);
             await runner.tick();
-            if (receiving && !testMode) await b.drain();
+            if (receiving && !testMode) await tick();
             return publicState();
           }
           if (action === "targets") return cindy.targets.list({ targetKind: "bot" });
@@ -1556,9 +1586,11 @@
               n.connection.receivingRequested = false;
               await b.save(n);
             });
+            receiving = false;
+            stopQueueTimer();
             if (testMode) await runner.cancel();
             else await lease.stop();
-            receiving = false;
+            await draining;
             listenerState = "paused";
             return publicState();
           }
@@ -1566,7 +1598,7 @@
             if (!receiving || testMode) fail("CHECK_CONNECTION_FIRST");
             if (!/^[a-f0-9-]{36}$/i.test(args.id || "")) fail("TASK_GUID_INVALID");
             await b.recoverAssigned(args.id);
-            await b.drain();
+            await tick();
             return publicState();
           }
           if (action === "reconcile") return b.reconcile(args.id);
@@ -1599,7 +1631,7 @@
                   if (t?.state === "pending") {
                     await b.enqueue(t.id, b.partnerTarget(t.id));
                   }
-                  await b.drain();
+                  await tick();
                 }
               } catch (e) {
                 listenerState = "attention";
@@ -1639,7 +1671,7 @@
             else if (msg.tool === "upload_result_file") result = await b.deliverFile(args, args.session_context?.session_id, args.dir_deposit, msg.callId);
             else fail("TOOL_UNSUPPORTED");
             if (testMode) await runner.tick();
-            else if (receiving) await b.drain();
+            else if (receiving) await tick();
             await cindy.send({ type: "tool-result", callId: msg.callId, ok: true, result });
             channel.postMessage({ type: "changed" });
           } catch (e) {
@@ -1667,8 +1699,11 @@
           async prepareRemoval() {
             await ready();
             if (testMode) fail("TEST_ALREADY_ACTIVE");
-            if (receiving) await lease.stop();
+            const wasReceiving = receiving;
             receiving = false;
+            stopQueueTimer();
+            if (wasReceiving) await lease.stop();
+            await draining;
             listenerState = "paused";
             await bridge.serial(async () => {
               const n = JSON.parse(JSON.stringify(bridge.state));

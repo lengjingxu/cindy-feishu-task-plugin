@@ -1,11 +1,10 @@
 {
   "schemaVersion": 3,
-  "minCindyVersion": "0.1.118",
   "id": "feishu-task-bridge",
   "name": "飞书任务",
   "description": "绑定飞书应用与 Cindy 伙伴，自动接收任务并回报进度和产物。",
   "whenToUse": "绑定飞书应用、查看任务，或由原关联伙伴回报任务进度与产物。",
-  "version": "0.15.3",
+  "version": "0.15.4",
   "kind": "chip",
   "entry": "main.js",
   "icon": "assets/icon.png",
@@ -407,5 +406,5 @@
       "accounts.feishu.cn"
     ]
   },
-  "releaseNotes": "修正接口缺失时的更新提示，区分绑定接口缺失、HTTP 请求失败和响应格式错误。补充 0.1.120 兼容性说明。此更新不补齐 Cindy 宿主接口。"
+  "releaseNotes": "插件自主唤醒预约队列，暂停后停止唤醒，未知投递不重发。撤下未经验证的最低正式版本声明；当前仅交付开发源码，正式兼容与安装包仍待验证。"
 }
