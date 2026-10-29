@@ -98,3 +98,37 @@ test('只有匹配原请求的Host结束回执才释放停止任务伙伴占位'
  await f.b.settleStopped();assert.equal(f.b.task('task-1').orphanedDelivery,false);
  await f.add({...f.event,id:'next',guid:'task2'});await f.b.drain();assert.equal(f.sends.length,2);
 });
+
+function queryable(f,overrides={}){
+ f.targets.capabilities=async()=>({delegation:{version:1,execution:true,receiptQuery:true,settled:true}});
+ f.targets.get=async({requestKey})=>({found:true,executionId:'plugin-target:execution',requestKey,target,taskId:'canonical-1',status:'accepted',settled:false,...overrides});
+}
+test('Host持久回执恢复丢失投递响应，无再次发送或飞书写入',async()=>{
+ const f=await fixture();f.targets.send=async p=>{f.sends.push(p);throw Error('timeout')};await assigned(f);assert.equal(f.b.task('task-1').state,'uncertain');
+ queryable(f);const recovered=f.make();await recovered.load();const r=await recovered.inspectExecution('task-1');assert.equal(r.state,'delivered');assert.equal(r.targetTaskId,'canonical-1');assert.equal(f.sends.length,1);assert.equal(f.writes.length,0);
+});
+test('回执不存在或仍pending时保留未知投递，不重发',async()=>{
+ const f=await fixture();f.targets.send=async p=>{f.sends.push(p);throw Error('timeout')};await assigned(f);
+ queryable(f,{found:false});assert.equal((await f.b.inspectExecution('task-1')).state,'uncertain');
+ queryable(f,{status:'pending'});assert.equal((await f.b.inspectExecution('task-1')).state,'uncertain');assert.equal(f.sends.length,1);
+});
+test('自然终态只保存证据，不把needs_input或结果回报误判完成',async()=>{
+ const f=await fixture();await assigned(f);f.b.state.tasks['task-1'].state='needs_input';
+ queryable(f,{settled:true,result:{outcome:'completed',instanceId:'native',generation:1,outputMessageId:'output'}});
+ const r=await f.b.inspectExecution('task-1');assert.equal(r.state,'needs_input');assert.equal(r.executionReceipt.result.outputMessageId,'output');assert.equal(f.writes.length,0);
+});
+test('撤回待核验通过原执行的settled查询结束占位，不重复cancel',async()=>{
+ const f=await fixture();await assigned(f);await f.b.cancel('task-1');let cancels=0;f.targets.cancel=async()=>{cancels++;throw Error('must not cancel again')};
+ queryable(f,{status:'cancelled',settled:true});const r=await f.b.inspectExecution('task-1');assert.equal(r.state,'stopped');assert.equal(r.orphanedDelivery,false);assert.equal(cancels,0);
+});
+test('缺公开能力、错误任务/伙伴/请求或无自然终态证据时拒绝认领',async()=>{
+ const f=await fixture();await assigned(f);await rejects(f.b.inspectExecution('task-1'),'HOST_RECEIPT_QUERY_UNAVAILABLE');
+ for(const bad of [{taskId:'wrong'},{target:{kind:'bot',id:'other'}},{requestKey:'wrong'},{settled:true}]){
+  queryable(f,bad);await rejects(f.b.inspectExecution('task-1'),'EXECUTION_RECEIPT_MISMATCH');
+ }
+ assert.equal(f.b.task('task-1').executionReceipt,undefined);assert.equal(f.sends.length,1);
+});
+test('未知投递已被Host取消并settled后解除占位，不保留永久忙碌',async()=>{
+ const f=await fixture();f.targets.send=async p=>{f.sends.push(p);throw Error('timeout')};await assigned(f);
+ queryable(f,{status:'cancelled',settled:true});assert.equal((await f.b.inspectExecution('task-1')).state,'stopped');assert.equal(f.sends.length,1);assert.equal(f.writes.length,0);
+});

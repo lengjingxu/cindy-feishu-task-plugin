@@ -261,6 +261,33 @@
           const caps = await this.targets.capabilities();
           if (caps?.delegation?.version !== 1 || caps.delegation.execution !== true) fail("HOST_DELEGATION_UNAVAILABLE");
         }
+        async inspectExecution(id) {
+          return this.serial(async () => {
+            const t = this.task(id);
+            if (!t.dispatch) return clone(t);
+            const caps = await this.targets.capabilities?.();
+            if (caps?.delegation?.version !== 1 || caps.delegation.receiptQuery !== true || caps.delegation.settled !== true || typeof this.targets.get !== "function") fail("HOST_RECEIPT_QUERY_UNAVAILABLE");
+            const receipt = await this.targets.get({ requestKey: t.dispatch.requestKey });
+            if (receipt?.found === false) return clone(t);
+            if (receipt?.found !== true || receipt.requestKey !== t.dispatch.requestKey || receipt.target?.kind !== t.dispatch.target.kind || receipt.target?.id !== t.dispatch.target.id || typeof receipt.executionId !== "string" || !receipt.executionId.startsWith("plugin-target:") || t.receipt?.executionId && receipt.executionId !== t.receipt.executionId || t.executionReceipt?.executionId && receipt.executionId !== t.executionReceipt.executionId || t.targetTaskId && receipt.taskId !== t.targetTaskId || !["pending", "accepted", "cancelled"].includes(receipt.status) || typeof receipt.settled !== "boolean") fail("EXECUTION_RECEIPT_MISMATCH");
+            if (receipt.status === "accepted" && (typeof receipt.taskId !== "string" || !receipt.taskId)) fail("EXECUTION_RECEIPT_MISMATCH");
+            if (receipt.settled && receipt.status !== "cancelled" && (!receipt.result || !["completed", "failed", "cancelled", "interrupted"].includes(receipt.result.outcome) || typeof receipt.result.instanceId !== "string" || !receipt.result.instanceId || !Number.isSafeInteger(receipt.result.generation) || receipt.result.generation < 0)) fail("EXECUTION_RECEIPT_MISMATCH");
+            const next = clone(this.state), n = next.tasks[id];
+            n.executionReceipt = receipt;
+            if (receipt.status === "accepted" && ["dispatching", "uncertain"].includes(n.state)) {
+              n.targetTaskId = receipt.taskId;
+              n.receipt = { accepted: true, ...receipt };
+              n.state = "delivered";
+              delete n.error;
+            }
+            if (receipt.settled && (["stopped", "cancel_check"].includes(n.state) || receipt.status === "cancelled" && ["dispatching", "uncertain"].includes(n.state))) {
+              n.orphanedDelivery = false;
+              n.state = "stopped";
+            }
+            await this.save(next);
+            return clone(n);
+          });
+        }
         async settleStopped() {
           for (const t of Object.values(this.state.tasks))
             if (t.dispatch && (t.orphanedDelivery || t.state === "cancel_check")) await this.cancel(t.id);
@@ -1660,7 +1687,8 @@
               await onboarding.authenticate(result.appId);
               connectionAuthenticated = true;
               await onboarding.inspect();
-            } else if (msg.tool === "get_task" || msg.tool === "inspect_delivery") result = b.task(args.id);
+            } else if (msg.tool === "get_task") result = b.task(args.id);
+            else if (msg.tool === "inspect_delivery") result = await b.inspectExecution(args.id);
             else if (msg.tool === "get_source_attachment") {
               const t = Object.values(b.state.tasks).find((t2) => t2.bindingId === args.bindingId);
               if (!t) fail("TASK_NOT_FOUND");
