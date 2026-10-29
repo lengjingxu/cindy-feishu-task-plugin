@@ -1168,7 +1168,18 @@
                 if (!t.result?.summary.includes(r.marker) || !t.result.artifacts?.length) fail("TEST_ARTIFACT_REQUIRED");
                 if (!snap.done || snap.agentStatus !== 4 || !snap.assigned || snap.title !== r.marker) fail("TEST_READBACK_MISMATCH");
                 if (t.outbox.some((op) => op.state !== "verified" || op.kind === "file" && !fileMatches(snap, op) || op.kind === "text" && !snap.textDeliveries.includes(op.value))) fail("TEST_READBACK_MISMATCH");
-                r = { ...r, proof: { operations: ["task.create", "task.event", "target.send", "text_delivery", "task_delivery", "agent_status", "task.readback"], guid: r.guid, event: r.event, delivery: r.delivery, readback: { done: snap.done, agentStatus: snap.agentStatus, attachments: snap.attachments, textDeliveries: snap.textDeliveries }, epoch: r.epoch } };
+                const downloads = [];
+                r = { ...r, proof: { operations: ["task.create", "task.event", "target.send", "text_delivery", "task_delivery", "agent_status", "task.readback"], guid: r.guid, event: r.event, delivery: r.delivery, readback: { done: snap.done, agentStatus: snap.agentStatus, attachments: snap.attachments, textDeliveries: snap.textDeliveries }, downloads, epoch: r.epoch } };
+                await this.save(r);
+                for (const artifact of t.result.artifacts) {
+                  const expected = require_artifacts().verifiedArtifact(t, artifact.id);
+                  const proof = await this.io.download(r, expected);
+                  if (proof?.verified !== true || proof.guid !== expected.guid || proof.bytes !== expected.bytes || proof.content !== r.marker + "\n" || !/^[a-f0-9]{64}$/.test(proof.sha256 || "")) fail("TEST_DOWNLOAD_CONTENT_MISMATCH");
+                  downloads.push(proof);
+                  r = { ...r, proof: { ...r.proof, downloads: [...downloads] } };
+                  await this.save(r);
+                }
+                r = { ...r, proof: { ...r.proof, operations: [...r.proof.operations, "attachment.download"] } };
                 await this.save(r);
                 return this.finish(true);
               }
@@ -1521,6 +1532,7 @@
                 testMode = false;
               },
               create: (r) => node("feishu/action", { action: "test_create", appId: r.appId, marker: r.marker }),
+              download: (r, artifact) => node("feishu/action", { action: "test_download", appId: r.appId, guid: r.guid, marker: r.marker, artifact }),
               absent: (r) => node("feishu/action", { action: "test_absent", appId: r.appId, guid: r.guid }),
               remove: (r) => node("feishu/action", { action: "test_delete", appId: r.appId, guid: r.guid, marker: r.marker })
             });

@@ -98,6 +98,7 @@ async function ready() {
       listen:async(appId,baseline,duration)=>{testMode=true;receiving=true;lease.start(appId,baseline,duration);await lease.waitReady();testTimer=setInterval(()=>runner.tick().catch(()=>{listenerState='attention';}),1000);},
       stop:async()=>{clearInterval(testTimer);await lease.stop();receiving=false;testMode=false;},
       create:r=>node('feishu/action',{action:'test_create',appId:r.appId,marker:r.marker}),
+      download:(r,artifact)=>node('feishu/action',{action:'test_download',appId:r.appId,guid:r.guid,marker:r.marker,artifact}),
       absent:r=>node('feishu/action',{action:'test_absent',appId:r.appId,guid:r.guid}),
       remove:r=>node('feishu/action',{action:'test_delete',appId:r.appId,guid:r.guid,marker:r.marker})
     });
