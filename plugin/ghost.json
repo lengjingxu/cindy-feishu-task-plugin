@@ -1,0 +1,411 @@
+{
+  "schemaVersion": 3,
+  "minCindyVersion": "0.1.118",
+  "id": "feishu-task-bridge",
+  "name": "飞书任务",
+  "description": "绑定飞书应用与 Cindy 伙伴，自动接收任务并回报进度和产物。",
+  "whenToUse": "绑定飞书应用、查看任务，或由原关联伙伴回报任务进度与产物。",
+  "version": "0.15.2",
+  "kind": "chip",
+  "entry": "main.js",
+  "icon": "assets/icon.png",
+  "tools": [
+    {
+      "name": "list_inbox",
+      "description": "分页读取本插件收件箱，每页最多50条。",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "offset": {
+            "type": "integer",
+            "minimum": 0
+          }
+        },
+        "required": [],
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "get_task",
+      "description": "读取插件已接管任务，不读取伙伴对话历史。",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "applicationId": {
+            "type": "string",
+            "description": "应用连接ID，来自list_inbox或应用设置。多应用同名任务时必须提供。"
+          }
+        },
+        "required": [
+          "id"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "inspect_delivery",
+      "description": "查看保存的投递回执；未知结果不重发。",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "applicationId": {
+            "type": "string",
+            "description": "应用连接ID，来自list_inbox或应用设置。多应用同名任务时必须提供。"
+          }
+        },
+        "required": [
+          "id"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "report_progress",
+      "description": "从原关联任务报告真实进度，自动写回飞书进度和执行中状态，并独立读回核验。",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "bindingId": {
+            "type": "string"
+          },
+          "generation": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "sequence": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "message": {
+            "type": "string",
+            "maxLength": 16000
+          },
+          "verification": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "bindingId",
+          "generation",
+          "sequence",
+          "message"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "submit_result",
+      "description": "从原关联任务提交结果，自动回写摘要、验证范围、全部声明产物、进度与完成状态；无人工确认。只有state=done才表示全部读回核验通过。必须列明全部文件，纯文字产物显式传artifacts=[]。",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "bindingId": {
+            "type": "string"
+          },
+          "generation": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "sequence": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "message": {
+            "type": "string",
+            "maxLength": 16000
+          },
+          "verification": {
+            "type": "string"
+          },
+          "artifacts": {
+            "type": "array",
+            "maxItems": 5,
+            "items": {
+              "type": "object",
+              "properties": {
+                "id": {
+                  "type": "string"
+                },
+                "name": {
+                  "type": "string"
+                },
+                "bytes": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 52428800
+                }
+              },
+              "required": [
+                "id",
+                "name",
+                "bytes"
+              ],
+              "additionalProperties": false
+            }
+          }
+        },
+        "required": [
+          "bindingId",
+          "generation",
+          "sequence",
+          "message",
+          "artifacts"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "request_clarification",
+      "description": "记录需要补充的内容，不表示执行成功。",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "bindingId": {
+            "type": "string"
+          },
+          "generation": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "sequence": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "message": {
+            "type": "string",
+            "maxLength": 16000
+          },
+          "verification": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "bindingId",
+          "generation",
+          "sequence",
+          "message"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "upload_result_file",
+      "description": "回传submit_result已声明的真实文件。必须用ghost_call顶层dir交付单文件，由Host注入dir_deposit；不要在工具参数提供路径或token。校验来源、代次、文件名/字节数后上传并读回。上传认证不可用时保留产物和任务状态，不标为完成。",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "bindingId": {
+            "type": "string"
+          },
+          "generation": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "artifactId": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "bindingId",
+          "generation",
+          "artifactId"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "append_task_activity",
+      "description": "从原关联任务追加评论或步骤。同sequence只追加一次；评论按回执ID独立读回；步骤仅有API接收回执accepted_unverified，不代表已独立验证。未知结果不重发。",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "bindingId": {
+            "type": "string"
+          },
+          "generation": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "sequence": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "comment",
+              "step"
+            ]
+          },
+          "message": {
+            "type": "string",
+            "maxLength": 3000
+          }
+        },
+        "required": [
+          "bindingId",
+          "generation",
+          "sequence",
+          "kind",
+          "message"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "bind_application",
+      "description": "先通过官方 registerApp 添加新建或已有飞书应用，再在应用设置关联处理伙伴。未关联伙伴不接收任务；任务自动投递并回报。需要支持 Node 授权凭据保存的 Cindy 版本。",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "appId": {
+            "type": "string",
+            "description": "仅明确更新已有应用时提供，返回身份必须一致。"
+          },
+          "applicationId": {
+            "type": "string",
+            "description": "应用连接ID，来自list_inbox或应用设置。多应用同名任务时必须提供。"
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "get_source_attachment",
+      "description": "原关联伙伴读取当前飞书源任务附件的临时下载链接。核验任务、应用、附件归属和会话；与产物附件分离，不持久保存下载链接。",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "bindingId": {
+            "type": "string"
+          },
+          "generation": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "attachmentGuid": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "bindingId",
+          "generation",
+          "attachmentGuid"
+        ],
+        "additionalProperties": false
+      }
+    }
+  ],
+  "node": {
+    "entry": "node/worker.cjs",
+    "protocol": "json-rpc-stdio",
+    "lifecycle": "on-demand",
+    "idleTimeoutSeconds": 120,
+    "childSpawn": true,
+    "entries": [
+      "node/listener.cjs"
+    ],
+    "secretBindings": [
+      {
+        "key": "account",
+        "label": "飞书应用",
+        "methods": [
+          "binding/authorize",
+          "binding/authorize2",
+          "binding/authorize3",
+          "binding/authorize4",
+          "binding/restore",
+          "feishu/action",
+          "listener/run"
+        ],
+        "saveMethods": [
+          "binding/authorize"
+        ],
+        "url": "https://accounts.feishu.cn/",
+        "settingsMethod": "binding/authorize"
+      },
+      {
+        "key": "account2",
+        "label": "飞书应用2",
+        "methods": [
+          "binding/authorize",
+          "binding/authorize2",
+          "binding/authorize3",
+          "binding/authorize4",
+          "binding/restore",
+          "feishu/action",
+          "listener/run"
+        ],
+        "saveMethods": [
+          "binding/authorize2"
+        ],
+        "url": "https://accounts.feishu.cn/",
+        "settingsMethod": "binding/authorize2"
+      },
+      {
+        "key": "account3",
+        "label": "飞书应用3",
+        "methods": [
+          "binding/authorize",
+          "binding/authorize2",
+          "binding/authorize3",
+          "binding/authorize4",
+          "binding/restore",
+          "feishu/action",
+          "listener/run"
+        ],
+        "saveMethods": [
+          "binding/authorize3"
+        ],
+        "url": "https://accounts.feishu.cn/",
+        "settingsMethod": "binding/authorize3"
+      },
+      {
+        "key": "account4",
+        "label": "飞书应用4",
+        "methods": [
+          "binding/authorize",
+          "binding/authorize2",
+          "binding/authorize3",
+          "binding/authorize4",
+          "binding/restore",
+          "feishu/action",
+          "listener/run"
+        ],
+        "saveMethods": [
+          "binding/authorize4"
+        ],
+        "url": "https://accounts.feishu.cn/",
+        "settingsMethod": "binding/authorize4"
+      }
+    ]
+  },
+  "command": "feishu-task",
+  "launch": "resident",
+  "fs": true,
+  "sessionContext": true,
+  "agent": {
+    "tasks": true,
+    "targets": true,
+    "delegation": true
+  },
+  "mainView": {
+    "title": "飞书任务",
+    "icon": "calendar-days",
+    "html": "main-view.html"
+  },
+  "settingsHtml": "settings.html",
+  "network": {
+    "hosts": [
+      "open.feishu.cn",
+      "accounts.feishu.cn"
+    ]
+  },
+  "releaseNotes": "独立仓库预览发行：更新公开文档与可复现测试。需具备相应插件接口的测试版 Cindy。"
+}
