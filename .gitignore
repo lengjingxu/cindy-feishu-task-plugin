@@ -1,0 +1,9 @@
+node_modules/
+plugin/*.cindy
+dist/
+evidence/
+output/
+.env
+.env.*
+.DS_Store
+*.log
