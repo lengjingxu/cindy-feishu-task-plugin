@@ -14,3 +14,12 @@ test('权限不足不冒充可用；重启只恢复身份待核验',async()=>{co
 test('授权卡失败不保存',async()=>{let n=0;const f=fixture({authorize:async()=>{throw Error('SENSITIVE');},store:{restore:async()=>{},commit:async()=>{n++;}}});await assert.rejects(f.d.run(),{code:'AUTHORIZATION_CARD_FAILED'});assert.equal(n,0);});
 
 test('可先安全保存应用身份再关联伙伴；无安全存储仍拒绝上游授权',async()=>{const f=fixture({partnerId:null});const r=await f.d.run();assert.equal(r.appId,'cli_test');assert.equal(r.partnerId,null);assert.equal(r.closedLoop,'not_run');const restored=fixture({store:{restore:async()=>({saved:true,appId:'cli_test'})}});assert.equal((await restored.d.restore()).appId,'cli_test');await assert.rejects(fixture({partnerId:null,store:null}).d.run(),{code:GAP});});
+
+test('续授权失败与取消不替换旧凭据；先验证再提交',async()=>{
+ for(const mode of ['denied','verify-failed','cancelled']){
+  let saved='old';const control=new AbortController();
+  const f=fixture({signal:control.signal,store:{restore:async()=>({saved:true,appId:'cli_test'}),commit:async()=>{saved='new';return{saved:true,appId:'cli_test'};}},verify:async()=>{if(mode==='verify-failed')throw Error('invalid');if(mode==='cancelled')control.abort();return{appId:'cli_test'};},...(mode==='denied'?{registerApp:async()=>{throw {code:'access_denied'};}}:{})});
+  await assert.rejects(f.d.run({appId:'cli_test'}));assert.equal(saved,'old');
+ }
+ let verified=false;const f=fixture({verify:async()=>{verified=true;return{appId:'cli_test'};},store:{restore:async()=>({saved:true}),commit:async()=>{assert(verified);return{saved:true,appId:'cli_test'};}}});await f.d.run({appId:'cli_test'});
+});

@@ -11,11 +11,15 @@ class Onboarding {
   if(this.hasBindings()) fail('ACTIVE_BINDINGS_FROZEN');
   const s=copy(this.state); s.epoch++; s.identity={state:'pending'}; s.permissions={state:'unverified'}; s.publication={state:'unverified'}; s.events={state:'unverified'}; s.test={state:'not_run'}; await this.save(s);
  }); }
+ assertAuthorization(appId) {
+  if(this.hasBindings() && (!appId || appId!==this.b.state.connection?.appId))fail('ACTIVE_BINDINGS_FROZEN');
+  const run=this.b.state.testRun;if(run&&!['passed','failed','blocked'].includes(run.state))fail('TEST_ALREADY_ACTIVE');
+ }
  async authenticate(appId) { return this.b.serial(async()=>{
   if(!/^cli_[0-9a-f]{16}$/i.test(appId||'')) fail('APP_ID_INVALID');
   const old=this.b.state.connection?.appId;
   if(old && old!==appId && (Object.keys(this.b.state.tasks).length || ['registration','subscription'].some(k=>this.state[k].state!=='unverified'))) fail('ACCOUNT_HAS_TASK_HISTORY');
-  if(this.hasBindings()) fail('ACTIVE_BINDINGS_FROZEN');
+  this.assertAuthorization(appId);
   let s=old===appId?copy(this.state):{...blank(),association:copy(this.state.association)}; s.epoch++; s.identity={state:'pending'}; s.permissions={state:'unverified'}; s.publication={state:'unverified'}; s.events={state:'unverified'}; s.test={state:'not_run'};
   await this.save(s);
   const r=await this.node('feishu/action',{action:'check',appId});

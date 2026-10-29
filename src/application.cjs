@@ -158,7 +158,7 @@ async function ui(action, args = {}) {
   }
   if (action === "begin-binding") {
     if(receiving)fail("PAUSE_FIRST");
-    if(onboarding.hasBindings())fail("ACTIVE_BINDINGS_FROZEN");
+    onboarding.assertAuthorization(b.state.connection?.appId);
     return {ready:true};
   }
   if (action === "binding-complete") {
