@@ -6,19 +6,7 @@ const {chromium}=require('playwright');const fs=require('node:fs/promises');cons
   const page=await browser.newPage();page.on('pageerror',e=>errors.push(e.message));
   await page.route('http://localhost/**',async route=>{const name=new URL(route.request().url()).pathname.slice(1)||'main-view.html';if(name==='wake')return route.fulfill({status:200,body:'{}'});if(!['main-view.html','settings.html','ui.css','ui.js','tasks.js','qr.js'].includes(name))return route.abort();await route.fulfill({status:200,contentType:name.endsWith('.css')?'text/css':name.endsWith('.js')?'text/javascript':'text/html',body:await fs.readFile('plugin/'+name,'utf8')});});
   await page.addInitScript(()=>{
-   const originalFetch=window.fetch;window.bindingCancelled=0;
-   window.fetch=(url,options)=>{
-    if(url.startsWith('/secrets/')){window.removedSecrets.push(url);return Promise.resolve(new Response(null,{status:204}));}
-    if(!url.startsWith('/node-authorization/account'))return originalFetch(url,options);
-    window.lastAuthUrl=url;
-    return Promise.resolve(new Response(new ReadableStream({start(c){
-     const send=v=>c.enqueue(new TextEncoder().encode(JSON.stringify(v)+'\n'));
-     send({state:'authorize',url:'https://open.feishu.cn/page/launcher?user_code=fixture'});
-     window.finishBindingFixture=()=>{send({state:'saved',identity:'cli_fixture'});c.close();};
-     options.signal.addEventListener('abort',()=>{window.bindingCancelled++;try{c.error(new DOMException('Cancelled','AbortError'));}catch{}});
-    }}),{headers:{'Content-Type':'application/x-ndjson'}}));
-   };
-
+   window.bindingCancelled=0;
    const state={hostServicesAvailable:true,tasks:[{id:'task1',partnerId:'bot-original',state:'pending',snapshot:{title:'需要核对的项目周报与交付说明'.repeat(5),description:'这里是明确的任务要求。'.repeat(20)}},{id:'task2',state:'uncertain',snapshot:{title:'投递结果未知的任务',description:'不能换键重发'},dispatch:{target:{id:'bot1'}}}],connection:{},binding:{state:'unbound',partnerId:'bot1'},listenerState:'paused'};
    Object.assign(state.tasks[0].snapshot,{creator:{id:'user-a',type:'user',name:'张三'},tasklists:[{guid:'list-alpha',name:'客户方案'},{guid:'list-beta',name:'运营 <组>'}],start:{timestamp:1793404800000,isAllDay:true},due:{timestamp:1793491200000,isAllDay:false},repeatRule:'FREQ=WEEKLY;INTERVAL=1;BYDAY=MO',subtaskCount:1,subtasks:[{guid:'child',title:'整理客户访谈',done:false}],sourceAttachments:[{guid:'source-file',name:'访谈资料.pdf',bytes:2048}]});
    state.tasks.push({id:'scheduled-task',partnerId:'bot-original',state:'scheduled',schedule:{notBefore:1793404800000},snapshot:{title:'下一期客户复盘',creator:{id:'user-b',type:'user',name:'张三'},tasklists:[{guid:'list-alpha',name:'客户方案'}],repeatRule:'FREQ=WEEKLY;INTERVAL=1'}});
@@ -29,6 +17,13 @@ const {chromium}=require('playwright');const fs=require('node:fs/promises');cons
    window.BroadcastChannel=class{postMessage(msg){if(msg.type!=='request')return;window.fixtureCalls.push(msg.action);window.fixtureRequests.push(structuredClone(msg));let result;const active=state.applications?.find(a=>a.id===msg.args.applicationId);
     if(msg.action==='add-application'){state.applications.push({id:'second',credentialKey:'account2',status:'active',connection:{},binding:{},hostServicesAvailable:true});result={applicationId:'second'};}
     else if(msg.action==='begin-binding'&&active)result={credentialKey:active.credentialKey,appId:active.connection.appId,token:'reservation'};
+    else if(msg.action==='authorize-binding'){
+     window.lastAuthUrl=active?.credentialKey||'account';
+     queueMicrotask(()=>this.onmessage({data:{type:'binding-authorization',token:msg.args.token,url:'https://open.feishu.cn/page/launcher?user_code=fixture'}}));
+     window.finishBindingFixture=()=>this.onmessage({data:{reqId:msg.reqId,ok:true,result:{appId:'cli_second'}}});
+     window.cancelBindingFixture=()=>this.onmessage({data:{reqId:msg.reqId,ok:false,error:{message:'已取消',code:'CANCELLED'}}});return;
+    }
+    else if(msg.action==='cancel-binding'){window.bindingCancelled++;window.cancelBindingFixture();result={cancelled:true};}
     else if(msg.action==='binding-complete'&&active){active.status='active';active.connection={appId:'cli_second'};active.onboarding={identity:{state:'verified'}};result=state;}
     else if(msg.action==='select-partner'&&active){active.binding.partnerId=msg.args.target.id;result=state;}
     else if(msg.action==='prepare-removal'&&active){active.status=msg.args.mode==='delete'?'deleting':'disconnecting';result={credentialKey:active.credentialKey};}
@@ -95,14 +90,14 @@ const {chromium}=require('playwright');const fs=require('node:fs/promises');cons
   assert.match(await page.locator('[data-application=first]').innerText(),/业务应用 <一>/);assert.equal(await page.locator('[data-application=first] 一').count(),0);await page.locator('[data-application=first]').click();assert.equal(await page.locator('#app h2').innerText(),'业务应用 <一>');checks++;await page.getByRole('button',{name:'解除绑定',exact:true}).click();
   await page.getByRole('button',{name:'取消',exact:true}).click();assert.deepEqual(await page.evaluate(()=>removedSecrets),[]);checks++;
   await page.getByRole('button',{name:'返回应用列表'}).click();await page.getByRole('button',{name:'添加飞书应用',exact:true}).click();
-  await page.getByRole('button',{name:'绑定飞书应用',exact:true}).click();await page.locator('#binding-qr').waitFor();assert.equal(await page.evaluate(()=>lastAuthUrl),'/node-authorization/account2');assert.equal(await page.locator('#connection-partner').count(),0);checks++;
+  await page.getByRole('button',{name:'绑定飞书应用',exact:true}).click();await page.locator('#binding-qr').waitFor();assert.equal(await page.evaluate(()=>lastAuthUrl),'account2');assert.equal(await page.locator('#connection-partner').count(),0);checks++;
   await page.getByRole('button',{name:'取消',exact:true}).click();await page.getByRole('button',{name:'绑定飞书应用',exact:true}).waitFor();
   await page.getByRole('button',{name:'绑定飞书应用',exact:true}).click();await page.locator('#binding-qr').waitFor();await page.evaluate(()=>finishBindingFixture());
   await page.locator('#connection-partner').selectOption('bot1');await page.getByRole('button',{name:'保存执行伙伴',exact:true}).click();await page.getByRole('heading',{name:'验证应用连接'}).waitFor();checks++;
   assert.equal(await page.locator('#binding-qr').count(),0);assert.equal(await page.locator('#connection-partner').count(),0);checks++;
   await page.evaluate(()=>markSecondPassed());await page.evaluate(()=>refresh());
   await page.getByRole('button',{name:'解除绑定',exact:true}).click();await page.getByRole('button',{name:'确认',exact:true}).click();await page.locator('[data-application=second]').waitFor();
-  assert.deepEqual(await page.evaluate(()=>removedSecrets),['/secrets/account2']);checks++;
+  assert.deepEqual(await page.evaluate(()=>removedSecrets),[]);checks++;
   await page.locator('[data-application=second]').click();await page.getByRole('button',{name:'重新绑定'}).click();await page.locator('#binding-qr').waitFor();checks++;
   await page.getByRole('button',{name:'取消',exact:true}).click();await page.getByRole('button',{name:'重新绑定'}).waitFor();
   await page.getByRole('button',{name:'返回应用列表'}).click();

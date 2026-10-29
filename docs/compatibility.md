@@ -2,11 +2,19 @@
 
 ## 结论
 
-0.15.5 仅交付开发源码，不是已完成的飞书任务产品，也不提供完整兼容安装包。新增的 inspect_host_support 不需要凭据，检查的是当前适配器入口，不代表安全存储不存在或完整流程可用。
+0.15.6 仅交付开发源码，不是已完成的飞书任务产品，也不提供完整兼容安装包。新增的 inspect_host_support 不需要凭据，检查的是当前适配器入口，不代表安全存储不存在或完整流程可用。
 
 0.15.4 删除 minCindyVersion 导致 MANIFEST_INVALID，这只证明 schemaVersion 3 缺必填字段，**不是运行时能力缺口的证据**。目前没有已核实支持完整业务依赖的正式版本，不能为了打包而填写 0.1.118 或 0.1.120。源码清单仍不满足发行条件；不能将“故意不能打包”当作解决目标。
 
 正式随包 plugin-manifest.md 第 58–63 行要求该字段表示插件实际依赖的首个正式版本，供发布服务选择兼容 release，**不是单纯的 schema 加载版本**。plugin-compatibility.md 第 6–12 行另要求运行时能力检测。只读检查、隔离 VM 和 Forge 成功都不能证明同一完整插件已兼容。
+
+## 0.15.6 凭据实现与验证
+
+应用设置通过 BroadcastChannel 调插件 main；main 用公开 cindy.node.request 发起 settings 模式，worker 用飞书 SDK 获取用户授权 URL，经公开 node-notification 返回设置页。该路径不调用 bindAuthorization、不伪造 callId；工具调用模式仍同步捕获真实 bindAuthorization。SDK 领取密钥、验证身份和 Keychain 存取均在 Node 内完成。
+
+存储固定为 macOS Keychain。服务名使用插件账本中先行持久化的随机 UUID，账号使用四个应用槽位；密码通过 security 交互 stdin 输入并读回核验，不进入 argv、UI、日志或插件文件。该范围是本机系统用户的插件安装数据，不承诺操作系统级的 Cindy 账号隔离。复制账本会保留同一命名空间；丢失账本或卸载不会自动删除系统钥匙串，请先在应用设置解除绑定。其他 OS 明确返回 CREDENTIAL_PLATFORM_UNSUPPORTED，不降级为明文文件。
+
+2026-10-29 验证：167 单元测试、90 UI 断言（模拟 Host）；scripts/test-credentials-local.cjs 在 macOS 实际完成合成凭据保存、独立 worker 重启恢复、删除读回，以及真实飞书 SDK 联网获取授权 URL 后取消。测试没有扫码、创建应用或触碰真实任务。正式公开调用依据为随包 §4.12.1（自主 Node 请求与通知）、§4.12.3（本机进程及网络权限）。**尚未通过真实 Host 安装的设置页调用链，不将 SDK/独立进程成功当作该项验收。**
 
 ## 可复现证据
 
@@ -36,14 +44,14 @@
 
 飞书 SDK 注册、订阅、任务资料、预约（无开始日期的循环用截止日期）、队列、多应用映射、进度和结果协议仍属于插件。自主计时器不依赖页面操作；暂停阻止后续项与新唤醒，等待已开始单项结束，不能撤回已发请求。退出 Cindy 后不会继续执行。
 
-在保留动态扫码多应用、Host 文件过户与真实关联伙伴执行的条件下，正式版本缺少两项关键组合：**动态鉴权票据上传**与**范围受限的伙伴执行及可信 settled 回执**。另有插件自管安全凭据尚未实现/验证，不能混同为必然要改 Core 的缺口。见 [最小公开协议方案](minimal-host-contract.md)。
+在保留动态扫码多应用、Host 文件过户与真实关联伙伴执行的条件下，正式版本缺少两项关键组合：**动态鉴权票据上传**与**范围受限的伙伴执行及可信 settled 回执**。插件自管安全凭据现已实现 macOS 路径，真实 Host 扫码联调仍待验收。见 [最小公开协议方案](minimal-host-contract.md)。
 
 测试构建 33c0b30a3173e2c9afcec6fe8357f82f3cc733c9 仅作旧适配器参考。公开 v0.1.119 / v0.1.120-beta 不是上述安装构建。本阶段没有改 Core、现有安装或真实任务。
 
-## 本阶段检查
+## 0.15.5 历史检查
 
 本地 Node v26.7.0：构建通过，163 项单测、90 项模拟 Host UI 检查通过。新增检查覆盖无需凭据的能力查询、未声明伙伴执行能力的如实报告、普通请求不捕获授权/上传扩展。正式 ASAR 的真实 Node bootstrap 在隔离 VM 中执行本插件 bundle，返回 authorization=true、hostServicesEntry=false、childSpawn=true。
 
 没有执行真实安装、扫码、上传或伙伴闭环。本阶段未生成 .cindy，故无安装包校验值。新增工具和 setup.requires=[] 让无凭据的支持检查可被发现，业务动作仍保留自身认证/授权检查；未增加文件、网络、Node 或伙伴权限。
 
-清单仍保留测试适配器的 agent.delegation、secretBindings.saveMethods/settingsMethod 声明，以便旧测试代码的权限需求可审查；这些不是正式版已实现能力，也不授予权限。inspect_host_support 只探测入口，不调用或验证 scoped execution/settled。
+0.15.5 当时保留测试适配器声明；0.15.6 已删除全部 secretBindings/saveMethods/settingsMethod，仍保留等待联调的 agent.delegation。这些不是正式版已实现能力，也不授予权限。inspect_host_support 只探测入口，不调用或验证 scoped execution/settled。

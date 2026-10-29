@@ -14,11 +14,11 @@
 
 ## 当前发行
 
-**0.15.5 仅交付开发源码，完整兼容安装包尚不可提供。**
+**0.15.6 仅交付开发源码，完整兼容安装包尚不可提供。**
 
-新增 inspect_host_support，只读检查当前适配器需要的入口，不读取凭据、不发送任务。Node 仅在授权或上传请求捕获测试扩展，普通飞书请求和身份恢复不再无条件捕获。
+应用设置扫码改用插件 SDK + 公开 Node 通知。macOS 钥匙串保存凭据，插件账本仅保存随机命名空间；支持多应用恢复、取消扫码和解除绑定。已移除 saveCredential、secretBindings/saveMethods 与 /node-authorization 依赖。
 
-正式 0.1.120 已核实两个关键缺口：Node 动态鉴权与 Host 文件过户上传的组合，以及关联伙伴的范围受限执行和可信 settled 回执。插件自管安全凭据仍未实现；不能声称该部分天然要求修改 Core。见 [证据与验证范围](docs/compatibility.md) 及 [最小公开协议方案](docs/minimal-host-contract.md)。
+正式 0.1.120 已核实两个关键缺口：Node 动态鉴权与 Host 文件过户上传的组合，以及关联伙伴的范围受限执行和可信 settled 回执。插件自管安全凭据已实现 macOS 路径；真实 Host 设置页扫码仍待联调验收，其他操作系统明确不支持且无替代存储。见 [证据与验证范围](docs/compatibility.md) 及 [最小公开协议方案](docs/minimal-host-contract.md)。
 
 删除 minCindyVersion 导致的 MANIFEST_INVALID 是清单校验失败，不是运行时缺能力的证据。该字段代表完整插件实际功能依赖的正式版本；只读检查通过不能据此填写 0.1.120。当前没有可真实填写的完整兼容版本，不以伪造字段或另造诊断插件替代目标。历史 Releases 仅为测试构建预览。
 
