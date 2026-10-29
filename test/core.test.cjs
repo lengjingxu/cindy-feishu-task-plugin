@@ -153,3 +153,4 @@ test('已撤回accepted收据可settled但没有自然终态',async()=>{
 test('cancel-before-send墓碑可无target/taskId且不重发',async()=>{
  const f=await fixture();f.targets.send=async p=>{f.sends.push(p);throw Error('lost')};await assigned(f);queryable(f,{status:'cancelled',settled:true,target:undefined,taskId:undefined});assert.equal((await f.b.inspectExecution('task-1')).state,'stopped');assert.equal(f.sends.length,1);
 });
+test('相同远程快照和执行回执重复检查不保存',async()=>{const f=await fixture();await assigned(f);await f.b.inspect('task-1');const revision=f.b.state.revision;await f.b.inspect('task-1');assert.equal(f.b.state.revision,revision);queryable(f);await f.b.inspectExecution('task-1');const receiptRevision=f.b.state.revision;await f.b.inspectExecution('task-1');assert.equal(f.b.state.revision,receiptRevision);queryable(f,{settled:true,result:{outcome:'completed',instanceId:'native',generation:1}});await f.b.inspectExecution('task-1');assert(f.b.state.revision>receiptRevision);});

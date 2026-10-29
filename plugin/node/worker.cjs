@@ -153,6 +153,8 @@ var require_core = __commonJS({
         if (!this.state || this.state.version !== 1) fail("LEDGER_INVALID");
       }
       async save(next) {
+        next.revision = this.state.revision;
+        if (JSON.stringify(next) === JSON.stringify(this.state)) return;
         next.revision = this.state.revision + 1;
         await this.store.save(next);
         this.state = next;
@@ -811,6 +813,7 @@ var require_applications = __commonJS({
         return this.serial(async () => {
           const n = copy(this.state);
           const result = fn(n);
+          if (JSON.stringify(n) === JSON.stringify(this.state)) return result;
           n.revision++;
           await this.journal.save(n);
           this.state = n;

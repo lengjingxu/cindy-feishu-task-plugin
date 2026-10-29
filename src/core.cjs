@@ -15,7 +15,7 @@ class Bridge {
   constructor({ store, targets, remote, uuid, now = () => Date.now() }) { Object.assign(this, { store, targets, remote, uuid, now }); this.tail = Promise.resolve(); }
   serial(fn) { const next = this.tail.then(fn); this.tail = next.catch(() => {}); return next; }
   async load() { this.state = await this.store.load(); if (!this.state || this.state.version !== 1) fail("LEDGER_INVALID"); }
-  async save(next) { next.revision = this.state.revision + 1; await this.store.save(next); this.state = next; }
+  async save(next) { next.revision=this.state.revision; if(JSON.stringify(next)===JSON.stringify(this.state))return; next.revision = this.state.revision + 1; await this.store.save(next); this.state = next; }
   task(id) { const t = this.state.tasks[id]; if (!t) fail("TASK_NOT_FOUND"); return t; }
   async ingest(event) { return this.serial(async () => {
     if (!event.id || !event.guid || !event.appId) fail("EVENT_INVALID");

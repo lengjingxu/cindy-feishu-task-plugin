@@ -20,3 +20,4 @@ test('晚回执不能覆盖新身份、跨应用回执不能成为当前名称',
  const b=bridge();let release;const p=new AppProfile(b,()=>new Promise(r=>release=r));const running=p.refresh();b.state.connection.appId='cli_0000000000000002';release({appId,name:'旧名称',source:'bot/v3/info'});await running;assert.equal(b.state.appProfile,undefined);
  await new AppProfile(b,async()=>({appId,name:'串号',source:'bot/v3/info'})).refresh();assert.equal(b.state.appProfile.name,undefined);assert.equal(b.state.appProfile.error,'APP_PROFILE_INVALID');
 });
+test('重启后相同应用资料不因checkedAt变化追加快照',async()=>{const b=bridge();let saves=0;const save=b.save;b.save=async s=>{saves++;await save.call(b,s)};const read=async()=>({appId,name:'应用一',source:'bot/v3/info'});await new AppProfile(b,read,()=>100).refresh();await new AppProfile(b,read,()=>100000).refresh();assert.equal(saves,1);assert.equal(b.state.appProfile.checkedAt,100);});

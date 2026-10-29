@@ -2,7 +2,7 @@
 const {initial,fail}=require('./core.cjs');
 const slots=['account','account2','account3','account4'];
 const copy=x=>JSON.parse(JSON.stringify(x));
-// One append-only journal commits all application states. The legacy account is
+// One checkpointed journal commits all application states. The legacy account is
 // retained intact; deleted applications keep their task/receipt history.
 class Applications {
  constructor(journal,uuid){this.journal=journal;this.uuid=uuid;this.tail=Promise.resolve();}
@@ -14,7 +14,7 @@ class Applications {
  }
  get(id){const a=this.state.applications[id];if(!a)fail('APPLICATION_NOT_FOUND');return a;}
  entries(){return Object.values(this.state.applications);}
- async change(fn){return this.serial(async()=>{const n=copy(this.state);const result=fn(n);n.revision++;await this.journal.save(n);this.state=n;return result;});}
+ async change(fn){return this.serial(async()=>{const n=copy(this.state);const result=fn(n);if(JSON.stringify(n)===JSON.stringify(this.state))return result;n.revision++;await this.journal.save(n);this.state=n;return result;});}
  store(id){return {load:async()=>copy(this.get(id).state),save:s=>this.change(n=>{n.applications[id].state=copy(s);})};}
  async add(){return this.change(n=>{
   const slot=slots.find(s=>!Object.values(n.applications).some(a=>a.slot===s&&a.status!=='deleted'));
