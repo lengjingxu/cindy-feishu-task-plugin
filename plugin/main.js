@@ -873,12 +873,17 @@
             await this.save(s);
           });
         }
+        assertAuthorization(appId) {
+          if (this.hasBindings() && (!appId || appId !== this.b.state.connection?.appId)) fail("ACTIVE_BINDINGS_FROZEN");
+          const run = this.b.state.testRun;
+          if (run && !["passed", "failed", "blocked"].includes(run.state)) fail("TEST_ALREADY_ACTIVE");
+        }
         async authenticate(appId) {
           return this.b.serial(async () => {
             if (!/^cli_[0-9a-f]{16}$/i.test(appId || "")) fail("APP_ID_INVALID");
             const old = this.b.state.connection?.appId;
             if (old && old !== appId && (Object.keys(this.b.state.tasks).length || ["registration", "subscription"].some((k) => this.state[k].state !== "unverified"))) fail("ACCOUNT_HAS_TASK_HISTORY");
-            if (this.hasBindings()) fail("ACTIVE_BINDINGS_FROZEN");
+            this.assertAuthorization(appId);
             let s = old === appId ? copy(this.state) : { ...blank(), association: copy(this.state.association) };
             s.epoch++;
             s.identity = { state: "pending" };
@@ -1629,7 +1634,7 @@
           }
           if (action === "begin-binding") {
             if (receiving) fail("PAUSE_FIRST");
-            if (onboarding.hasBindings()) fail("ACTIVE_BINDINGS_FROZEN");
+            onboarding.assertAuthorization(b.state.connection?.appId);
             return { ready: true };
           }
           if (action === "binding-complete") {

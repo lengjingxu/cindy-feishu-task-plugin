@@ -731,14 +731,14 @@ var require_device_binding = __commonJS({
           if (control.signal.aborted) fail(expired ? "EXPIRED" : "CANCELLED");
           if (!result?.client_id || !result?.client_secret) fail("AUTHORIZATION_RECEIPT_UNKNOWN");
           if (appId && result.client_id !== appId) fail("APP_ID_MISMATCH");
-          await update("saving");
-          const receipt = await this.store.commit({ appId: result.client_id, partnerId, secret: result.client_secret });
-          if (control.signal.aborted) fail(expired ? "EXPIRED" : "CANCELLED");
-          if (!receipt?.saved || receipt.appId !== result.client_id) fail("CREDENTIAL_SAVE_UNKNOWN");
           await update("verifying");
           const check = await this.verify({ appId: result.client_id, secret: result.client_secret });
           if (control.signal.aborted) fail(expired ? "EXPIRED" : "CANCELLED");
           if (check?.appId !== result.client_id) fail("APP_ID_MISMATCH");
+          await update("saving");
+          if (control.signal.aborted) fail(expired ? "EXPIRED" : "CANCELLED");
+          const receipt = await this.store.commit({ appId: result.client_id, partnerId, secret: result.client_secret });
+          if (!receipt?.saved || receipt.appId !== result.client_id) fail("CREDENTIAL_SAVE_UNKNOWN");
           const state = { state: check.scopesGranted === true ? "bound" : "permissions_required", appId: result.client_id, partnerId, credentialSaved: true, registration: "unverified", publication: "unverified", events: "unverified", closedLoop: "not_run" };
           await this.saveState(state);
           return state;

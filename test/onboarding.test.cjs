@@ -26,3 +26,14 @@ test('订阅保留服务端拒绝原因且不能冒充成功',async()=>{
  await assert.rejects(f.o.provision('subscription'),{code:'PROVISION_OUTCOME_UNKNOWN'});
  await f.o.provision('subscription',false,true);assert.equal(f.o.state.subscription.error,'FEISHU_API_2200');
 });
+
+test('原应用续授权保留在途任务、循环及伙伴；换应用与解除仍冻结',async()=>{
+ const {o,b,writes}=await fixture();await o.authenticate(appId);
+ b.state.tasks={waiting:{state:'needs_input',dispatch:{target:{kind:'bot',id:'chosen'},requestKey:'original'},bindingId:'binding',generation:3},repeat:{state:'pending',queuedTarget:{kind:'bot',id:'chosen'},recurrence:{id:'original'}}};
+ const tasks=structuredClone(b.state.tasks),connection=structuredClone(b.state.connection),association=structuredClone(o.state.association);
+ o.assertAuthorization(appId);await o.authenticate(appId);
+ assert.deepEqual(b.state.tasks,tasks);assert.deepEqual(b.state.connection,connection);assert.deepEqual(o.state.association,association);
+ const n=writes.length;await assert.rejects(o.authenticate('cli_1111111111111111'),{code:'ACCOUNT_HAS_TASK_HISTORY'});assert.equal(writes.length,n);
+ await assert.rejects(o.invalidateCredentials(),{code:'ACTIVE_BINDINGS_FROZEN'});
+ for(const state of ['running','create_uncertain','cleanup_pending']){b.state.testRun={state};assert.throws(()=>o.assertAuthorization(appId),{code:'TEST_ALREADY_ACTIVE'});}
+});

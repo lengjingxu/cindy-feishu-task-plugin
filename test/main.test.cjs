@@ -145,3 +145,11 @@ test('设置页授权只发公开Node请求，命名空间持久化且取消沿�
  const wrong=await h.ui('authorize-binding',{applicationId:'account',token:'wrong'});assert.equal(wrong.error.code,'AUTHORIZATION_REQUIRED');
  const ledger=[...h.files.values()].map(x=>JSON.parse(x)).filter(x=>x.payload).map(x=>JSON.parse(x.payload));assert(ledger.some(x=>x.credentialScope===auth.params.credentialScope));
 });
+
+test('设置页在途原应用续授权固定身份，禁止解除与工具换绑',async()=>{
+ const {initial}=require('../src/core.cjs'),{blank}=require('../src/onboarding.cjs');
+ const appId='cli_0000000000000001';const state={...initial(),connection:{appId,partnerId:'original'},onboarding:{...blank(),identity:{state:'verified',appId}},tasks:{old:{id:'old',state:'needs_input',dispatch:{target:{kind:'bot',id:'original'},requestKey:'old-key'}}}};
+ const h=await multiFixture(state);const begin=await h.ui('begin-binding');assert.equal(begin.ok,true);assert.equal(begin.result.appId,appId);
+ await h.ui('authorize-binding',{token:begin.result.token});const call=h.nodeCalls.find(x=>x.method==='binding/authorize');assert.equal(call.params.appId,appId);assert.equal(call.params.authorizationMode,'settings');assert.equal(call.callId,undefined);
+ const removal=await h.ui('prepare-removal',{mode:'disconnect'});assert.equal(removal.ok,false);assert.equal(h.sent.length,0);
+});
