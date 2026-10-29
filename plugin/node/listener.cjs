@@ -112761,7 +112761,7 @@ var require_core = __commonJS({
       async assertExecution() {
         typeof this.targets.capabilities != "function" && fail("HOST_DELEGATION_UNAVAILABLE");
         let caps = await this.targets.capabilities();
-        (caps?.delegation?.version !== 1 || caps.delegation.execution !== !0) && fail("HOST_DELEGATION_UNAVAILABLE");
+        (caps?.delegation?.version !== 1 || caps.delegation.execution !== !0 || caps.delegation.receiptQuery !== !0 || caps.delegation.settled !== !0 || typeof this.targets.get != "function") && fail("HOST_DELEGATION_UNAVAILABLE");
       }
       async inspectExecution(id) {
         return this.serial(async () => {
@@ -112771,9 +112771,9 @@ var require_core = __commonJS({
           (caps?.delegation?.version !== 1 || caps.delegation.receiptQuery !== !0 || caps.delegation.settled !== !0 || typeof this.targets.get != "function") && fail("HOST_RECEIPT_QUERY_UNAVAILABLE");
           let receipt = await this.targets.get({ requestKey: t.dispatch.requestKey });
           if (receipt?.found === !1) return clone(t);
-          (receipt?.found !== !0 || receipt.requestKey !== t.dispatch.requestKey || receipt.target?.kind !== t.dispatch.target.kind || receipt.target?.id !== t.dispatch.target.id || typeof receipt.executionId != "string" || !receipt.executionId.startsWith("plugin-target:") || t.receipt?.executionId && receipt.executionId !== t.receipt.executionId || t.executionReceipt?.executionId && receipt.executionId !== t.executionReceipt.executionId || t.targetTaskId && receipt.taskId !== t.targetTaskId || !["pending", "accepted", "cancelled"].includes(receipt.status) || typeof receipt.settled != "boolean") && fail("EXECUTION_RECEIPT_MISMATCH");
+          (receipt?.found !== !0 || receipt.requestKey !== t.dispatch.requestKey || (receipt.target ? receipt.target.kind !== t.dispatch.target.kind || receipt.target.id !== t.dispatch.target.id : !(receipt.status === "cancelled" && receipt.settled && !t.targetTaskId)) || typeof receipt.executionId != "string" || !receipt.executionId.startsWith("plugin-target:") || t.receipt?.executionId && receipt.executionId !== t.receipt.executionId || t.executionReceipt?.executionId && receipt.executionId !== t.executionReceipt.executionId || t.targetTaskId && receipt.taskId !== t.targetTaskId || !["pending", "accepted", "cancelled"].includes(receipt.status) || typeof receipt.settled != "boolean") && fail("EXECUTION_RECEIPT_MISMATCH");
           let executed = receipt.status === "accepted" || receipt.status === "pending" && receipt.settled && receipt.result;
-          executed && (typeof receipt.taskId != "string" || !receipt.taskId) && fail("EXECUTION_RECEIPT_MISMATCH"), receipt.settled && receipt.status !== "cancelled" && (!receipt.result || !["completed", "failed", "cancelled", "interrupted"].includes(receipt.result.outcome) || typeof receipt.result.instanceId != "string" || !receipt.result.instanceId || !Number.isSafeInteger(receipt.result.generation) || receipt.result.generation < 0) && fail("EXECUTION_RECEIPT_MISMATCH");
+          executed && (typeof receipt.taskId != "string" || !receipt.taskId) && fail("EXECUTION_RECEIPT_MISMATCH"), receipt.result && (!receipt.settled || !["completed", "failed", "cancelled", "interrupted"].includes(receipt.result.outcome) || typeof receipt.result.instanceId != "string" || !receipt.result.instanceId || !Number.isSafeInteger(receipt.result.generation) || receipt.result.generation < 0) && fail("EXECUTION_RECEIPT_MISMATCH");
           let next = clone(this.state), n = next.tasks[id];
           return n.executionReceipt = receipt, executed && ["dispatching", "uncertain"].includes(n.state) && (n.targetTaskId = receipt.taskId, n.receipt = { accepted: !0, ...receipt }, n.state = "delivered", delete n.error), receipt.settled && (["stopped", "cancel_check"].includes(n.state) || receipt.status === "cancelled" && ["dispatching", "uncertain"].includes(n.state)) && (n.orphanedDelivery = !1, n.state = "stopped"), await this.save(next), clone(n);
         });
@@ -112850,7 +112850,7 @@ var require_core = __commonJS({
           return next2.tasks[id].state = "uncertain", next2.tasks[id].error = e.code || "DELIVERY_UNCERTAIN", await this.save(next2), clone(next2.tasks[id]);
         }
         let next = clone(this.state), n = next.tasks[id];
-        return receipt?.accepted !== !0 || !receipt.taskId ? (n.state = "uncertain", n.error = "DELIVERY_UNCERTAIN") : (n.state = "delivered", n.targetTaskId = receipt.taskId, n.receipt = receipt), await this.save(next), clone(n);
+        return receipt?.accepted !== !0 || !receipt.taskId || receipt.delivery !== "queue" || receipt.requestKey !== t.dispatch.requestKey || typeof receipt.executionId != "string" || !receipt.executionId.startsWith("plugin-target:") || receipt.target?.kind !== t.dispatch.target.kind || receipt.target?.id !== t.dispatch.target.id ? (n.state = "uncertain", n.error = "DELIVERY_UNCERTAIN") : (n.state = "delivered", n.targetTaskId = receipt.taskId, n.receipt = receipt), await this.save(next), clone(n);
       }
       async stop(id) {
         let next = clone(this.state);
@@ -112970,7 +112970,7 @@ var require_core = __commonJS({
           let t = this.task(id);
           (!t.dispatch || !["delivered", "uncertain", "stopped", "cancel_check"].includes(t.state)) && fail("CANCEL_NOT_AVAILABLE");
           let receipt = await this.targets.cancel({ requestKey: t.dispatch.requestKey }), next = clone(this.state), n = next.tasks[id];
-          return n.cancelReceipt = receipt, receipt?.cancelled === !0 && receipt.settled === !0 && receipt.requestKey === t.dispatch.requestKey && typeof receipt.clientId == "string" && receipt.clientId.startsWith("plugin-target:") ? (n.orphanedDelivery = !1, n.state = "stopped") : n.state !== "stopped" && (n.state = "cancel_check"), await this.save(next), { receipt };
+          return n.cancelReceipt = receipt, receipt?.cancelled === !0 && receipt.settled === !0 && receipt.requestKey === t.dispatch.requestKey && typeof receipt.clientId == "string" && receipt.clientId.startsWith("plugin-target:") && (!t.receipt?.executionId || receipt.clientId === t.receipt.executionId) && (!t.executionReceipt?.executionId || receipt.clientId === t.executionReceipt.executionId) ? (n.orphanedDelivery = !1, n.state = "stopped") : n.state !== "stopped" && (n.state = "cancel_check"), await this.save(next), { receipt };
         });
       }
     };

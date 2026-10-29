@@ -37,7 +37,7 @@ async function multiFixture(seed,{nameRead}={}){
  const snapshots=new Map();
  const identities={account:'cli_0000000000000001',account2:'cli_0000000000000002'};
  class Channel{constructor(){channel=this}postMessage(v){replies.push(v)}}
- const cindy={fs:async r=>{if(r.op==='read')return files.has(r.path)?{ok:true,content:files.get(r.path)}:{ok:false,errorCode:'NOT_FOUND'};files.set(r.path,r.content);return{ok:true}},targets:{list:async()=>({targets:[]}),resolve:async p=>p.target,capabilities:async()=>({delegation:{version:1,execution:true}}),send:async p=>{sent.push(p);return{accepted:true,taskId:p.target.id+'-session'}}},node:{request:async r=>{
+ const cindy={fs:async r=>{if(r.op==='read')return files.has(r.path)?{ok:true,content:files.get(r.path)}:{ok:false,errorCode:'NOT_FOUND'};files.set(r.path,r.content);return{ok:true}},targets:{list:async()=>({targets:[]}),resolve:async p=>p.target,get:async()=>({found:false}),capabilities:async()=>({delegation:{version:1,execution:true,receiptQuery:true,settled:true}}),send:async p=>{sent.push(p);return{executionId:'plugin-target:execution',requestKey:p.requestKey,target:p.target,delivery:'queue',accepted:true,taskId:p.target.id+'-session'}}},node:{request:async r=>{
   nodeCalls.push(r);const p=r.params||{};
   if(r.method==='binding/remove'){delete identities[p.credentialKey];return{ok:true,result:{removed:true}};}
   if(r.method==='binding/restore')return{ok:true,result:identities[p.credentialKey]?{saved:true,appId:identities[p.credentialKey],hostServices:true}:{saved:false,hostServices:true}};

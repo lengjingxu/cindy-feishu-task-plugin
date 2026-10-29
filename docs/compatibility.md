@@ -61,3 +61,9 @@
 插件 inspect_delivery 已接入配套源码 2cede009a3（合并 upstream 后 5da63da932）的 targets.get({requestKey})。只有 delegation.receiptQuery=true、settled=true 时查询，校验 requestKey、target、executionId、taskId。accepted 可恢复丢失的投递响应；not found/pending 均不重发。自然终态保存 executionReceipt，不把 completed、failed、interrupted 或 cancelled 当作飞书结果已经交付，不修改 needs_input 或产物回报状态。原撤回待核验任务只有同一执行可信 settled 才释放占位。
 
 现有 authenticatedFetch 上传与 targets.send 委派参数已核对配套源码，未变更。原 dir_deposit 必须使用本次真实 callId，不能跨调用复用。新增回执测试使用模拟 Host；此处不是正式版安装兼容或真实伙伴执行验收。
+
+## 0.15.7 精确收据契约与同 profile 验证
+
+发送前要求 execution、receiptQuery、settled 均为 true，并存在 targets.get。普通 send 受理不作为委派成功：校验 queue、requestKey、target 和 executionId。可信 cancel.clientId 必须匹配已知 executionId。get 的先取消墓碑允许没有 target/taskId，settled 无 result 表示已撤回或未开始，不伪造自然终态。
+
+2026-10-29 配套源码 4de744c132 已在原 CindyDev 测试 profile 启动，公开接口实测返回 get/receiptQuery/settled。Host 修复缺文件 NOT_FOUND 回归，50 项 fsSlot 测试通过；实际迁移前自动备份和 135→136 成功已核验。插件安装仍停留原生文件选择窗口，扫码、真实委派、文件回报未完成。该结果不代表正式 0.1.120 兼容，正式源码仍不填未经验收的 minCindyVersion。
