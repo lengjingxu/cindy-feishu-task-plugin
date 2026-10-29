@@ -127713,6 +127713,31 @@ var require_task_context = __commonJS({
   }
 });
 
+// src/test-download.cjs
+var require_test_download = __commonJS({
+  "src/test-download.cjs"(exports2, module2) {
+    "use strict";
+    var { createHash } = require("node:crypto");
+    var { fail } = require_core();
+    async function verifyDownload(fetcher, url, marker) {
+      const expected = Buffer.from(marker + "\n", "utf8");
+      const response = await fetcher(url, { redirect: "error", signal: AbortSignal.timeout(15e3) });
+      if (!response.ok || !response.body) fail("TEST_DOWNLOAD_FAILED");
+      const chunks = [];
+      let bytes = 0;
+      for await (const chunk of response.body) {
+        bytes += chunk.length;
+        if (bytes > expected.length) fail("TEST_DOWNLOAD_CONTENT_MISMATCH");
+        chunks.push(Buffer.from(chunk));
+      }
+      const content = Buffer.concat(chunks);
+      if (!content.equals(expected)) fail("TEST_DOWNLOAD_CONTENT_MISMATCH");
+      return { verified: true, bytes: content.length, sha256: createHash("sha256").update(content).digest("hex"), content: content.toString("utf8") };
+    }
+    module2.exports = { verifyDownload };
+  }
+});
+
 // src/feishu.cjs
 var require_feishu = __commonJS({
   "src/feishu.cjs"(exports2, module2) {
@@ -127882,13 +127907,18 @@ var require_feishu = __commonJS({
           const r = await request("/task/v2/attachments/" + expected.guid);
           return require_task_context().sourceLink(r.data?.attachment, expected, params.guid);
         }
-        if (params.action === "attachment_link") {
+        if (params.action === "attachment_link" || params.action === "test_download") {
           if (!assigned) fail("SOURCE_REVOKED");
           const a = params.artifact;
           if (!/^[a-f0-9-]{36}$/i.test(a?.guid || "")) fail("ARTIFACT_NOT_FOUND");
           if (!snapshot.attachments.some((item) => item.guid === a.guid && item.name === a.name && item.size === a.bytes && item.resource?.id === params.guid && item.resource?.type === "task_delivery")) fail("ARTIFACT_SCOPE_MISMATCH");
           const detail = await request("/task/v2/attachments/" + a.guid);
-          return require_artifacts().attachmentLink(detail.data?.attachment, a, params.guid);
+          const link = require_artifacts().attachmentLink(detail.data?.attachment, a, params.guid);
+          if (params.action === "test_download") {
+            if (!/^cindy-test-[a-f0-9-]{36}$/.test(params.marker || "") || t.summary !== params.marker || !snapshot.soleAppAssignee || t.description !== require_test_spec().description(params.marker)) fail("TEST_DOWNLOAD_SCOPE_MISMATCH");
+            return { ...await require_test_download().verifyDownload(fetcher, link.url, params.marker), guid: a.guid, name: a.name };
+          }
+          return link;
         }
         if (!assigned || snapshot.done) fail("SOURCE_REVOKED");
         if (params.action === "activity_write") {

@@ -70,7 +70,7 @@ function render(){
   }else if(onboarding.test?.state!=='passed'){
    content='<h3>验证应用连接</h3><p>处理伙伴：'+esc(partnerLabel(binding.partnerId))+'</p>'+(view.testRun?.error?'<p role="status">验证未通过</p>':'')+(onboarding.permissions?.state!=='verified'?'<div class="actions">'+button('检查应用权限','inspect-configuration')+button('更新授权','bind')+'</div>':button('开始连接测试','test-connection'));
   }else{
-   content='<h3>应用连接</h3><p>处理伙伴：'+esc(partnerLabel(binding.partnerId))+'</p><p>'+esc(view.receiving?'正在接收任务':'任务接收已暂停')+'</p>'+button(view.receiving?'暂停接收':'开启接收',view.receiving?'pause':'receive');
+   content='<h3>应用连接</h3><p>处理伙伴：'+esc(partnerLabel(binding.partnerId))+'</p><p>'+esc(view.receiving?'正在接收任务':'任务接收已暂停')+'</p>'+button(view.receiving?'暂停接收':'开启接收',view.receiving?'pause':'receive')+(!view.receiving?button('重新验证连接','test-connection'):'');
   }
   const hasList=Array.isArray(state.applications);
   const controls=!bindingFlow&&!removing&&!editingPartner&&!['running','cleanup_pending','cleanup_uncertain'].includes(view.testRun?.state);

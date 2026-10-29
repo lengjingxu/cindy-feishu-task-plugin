@@ -123,14 +123,19 @@ async function action(params, secret, fetcher = fetch, host = null) {
       const r=await request('/task/v2/attachments/'+expected.guid);
       return require('./task-context.cjs').sourceLink(r.data?.attachment,expected,params.guid);
     }
-    if (params.action === "attachment_link") {
+    if (params.action === "attachment_link" || params.action === 'test_download') {
       if (!assigned) fail("SOURCE_REVOKED");
       const a = params.artifact;
       if (!/^[a-f0-9-]{36}$/i.test(a?.guid || "")) fail("ARTIFACT_NOT_FOUND");
       if (!snapshot.attachments.some(item => item.guid === a.guid && item.name === a.name && item.size === a.bytes &&
           item.resource?.id === params.guid && item.resource?.type === "task_delivery")) fail("ARTIFACT_SCOPE_MISMATCH");
       const detail = await request("/task/v2/attachments/" + a.guid);
-      return require("./artifacts.cjs").attachmentLink(detail.data?.attachment, a, params.guid);
+      const link=require("./artifacts.cjs").attachmentLink(detail.data?.attachment, a, params.guid);
+      if(params.action==='test_download'){
+        if(!/^cindy-test-[a-f0-9-]{36}$/.test(params.marker||'')||t.summary!==params.marker||!snapshot.soleAppAssignee||t.description!==require('./test-spec.cjs').description(params.marker))fail('TEST_DOWNLOAD_SCOPE_MISMATCH');
+        return {...await require('./test-download.cjs').verifyDownload(fetcher,link.url,params.marker),guid:a.guid,name:a.name};
+      }
+      return link;
     }
     if (!assigned || snapshot.done) fail("SOURCE_REVOKED");
     if(params.action==='activity_write') {

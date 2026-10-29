@@ -1,0 +1,5 @@
+const {test}=require('node:test'),assert=require('node:assert/strict');const {verifyDownload}=require('../src/test-download.cjs');const {createHash}=require('node:crypto');
+const marker='cindy-test-00000000-0000-0000-0000-000000000001',content=marker+String.fromCharCode(10);
+test('下载真实响应字节并校验完整标记和hash，不向下载URL发送Bearer',async()=>{const r=await verifyDownload(async(url,init)=>{assert.equal(url,'https://example.test/signed');assert.equal(init.headers,undefined);assert.equal(init.redirect,'error');return new Response(content);},'https://example.test/signed',marker);assert.equal(r.bytes,48);assert.equal(r.content,content);assert.equal(r.sha256,createHash('sha256').update(content).digest('hex'));});
+for(const body of [marker,content+'extra','x'.repeat(48)])test('拒绝不一致下载 '+body.length,async()=>{await assert.rejects(verifyDownload(async()=>new Response(body),'https://example.test/signed',marker),{code:'TEST_DOWNLOAD_CONTENT_MISMATCH'});});
+test('下载HTTP失败不冒充成功',async()=>{await assert.rejects(verifyDownload(async()=>new Response('',{status:403}),'https://example.test/signed',marker),{code:'TEST_DOWNLOAD_FAILED'});});
