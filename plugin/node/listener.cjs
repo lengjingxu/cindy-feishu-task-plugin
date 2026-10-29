@@ -112702,7 +112702,7 @@ var require_core = __commonJS({
         this.state = await this.store.load(), (!this.state || this.state.version !== 1) && fail("LEDGER_INVALID");
       }
       async save(next) {
-        next.revision = this.state.revision + 1, await this.store.save(next), this.state = next;
+        next.revision = this.state.revision, JSON.stringify(next) !== JSON.stringify(this.state) && (next.revision = this.state.revision + 1, await this.store.save(next), this.state = next);
       }
       task(id) {
         let t = this.state.tasks[id];

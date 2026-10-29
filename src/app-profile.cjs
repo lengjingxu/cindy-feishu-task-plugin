@@ -27,7 +27,7 @@ class AppProfile {
    if(this.b.state.connection?.appId!==appId)return;
    const next=JSON.parse(JSON.stringify(this.b.state));
    const previous=next.appProfile?.appId===appId?next.appProfile:{};
-   next.appProfile=profile.state==='verified'?profile:{...previous,...profile};await this.b.save(next);
+   next.appProfile=profile.state==='verified'?profile:{...previous,...profile};if(JSON.stringify({...next.appProfile,checkedAt:0})===JSON.stringify({...previous,checkedAt:0}))return;await this.b.save(next);
   });
  }
 }
