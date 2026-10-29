@@ -703,9 +703,11 @@ var require_device_binding = __commonJS({
           if (appId && result.client_id !== appId) fail("APP_ID_MISMATCH");
           await update("saving");
           const receipt = await this.store.commit({ appId: result.client_id, partnerId, secret: result.client_secret });
+          if (control.signal.aborted) fail(expired ? "EXPIRED" : "CANCELLED");
           if (!receipt?.saved || receipt.appId !== result.client_id) fail("CREDENTIAL_SAVE_UNKNOWN");
           await update("verifying");
           const check = await this.verify({ appId: result.client_id, secret: result.client_secret });
+          if (control.signal.aborted) fail(expired ? "EXPIRED" : "CANCELLED");
           if (check?.appId !== result.client_id) fail("APP_ID_MISMATCH");
           const state = { state: check.scopesGranted === true ? "bound" : "permissions_required", appId: result.client_id, partnerId, credentialSaved: true, registration: "unverified", publication: "unverified", events: "unverified", closedLoop: "not_run" };
           await this.saveState(state);
@@ -765,6 +767,9 @@ var require_applications = __commonJS({
           state = await this.journal.load();
         }
         this.state = state.applicationsVersion === 1 ? state : { ...initial(), applicationsVersion: 1, applications: { account: { id: "account", slot: "account", status: "active", state } } };
+        if (!this.state.credentialScope) await this.change((n) => {
+          n.credentialScope = this.uuid();
+        });
       }
       get(id) {
         const a = this.state.applications[id];
@@ -815,6 +820,87 @@ var require_applications = __commonJS({
       }
     };
     module2.exports = { Applications, slots: slots2 };
+  }
+});
+
+// src/credential-store.cjs
+var require_credential_store = __commonJS({
+  "src/credential-store.cjs"(exports2, module2) {
+    "use strict";
+    var { spawn } = require("node:child_process");
+    var { randomUUID } = require("node:crypto");
+    var { slots: slots2 } = require_applications();
+    var fail = (code) => {
+      throw Object.assign(Error(code), { code });
+    };
+    function security(args, input2) {
+      return new Promise((resolve, reject) => {
+        const child = spawn("/usr/bin/security", args, { stdio: ["pipe", "pipe", "pipe"] });
+        let out = "";
+        const timer = setTimeout(() => {
+          child.kill();
+          reject(Object.assign(Error("CREDENTIAL_STORE_UNAVAILABLE"), { code: "CREDENTIAL_STORE_UNAVAILABLE" }));
+        }, 2e4);
+        child.once("close", () => clearTimeout(timer));
+        child.once("error", () => clearTimeout(timer));
+        child.stdout.on("data", (b) => {
+          out += b;
+        });
+        child.stderr.resume();
+        child.on("error", () => reject(Object.assign(Error("CREDENTIAL_STORE_UNAVAILABLE"), { code: "CREDENTIAL_STORE_UNAVAILABLE" })));
+        child.on("close", (code) => resolve({ code, out }));
+        child.stdin.on("error", () => {
+        });
+        child.stdin.end(input2);
+      });
+    }
+    var CredentialStore2 = class {
+      constructor(scope, { run = security, platform = process.platform } = {}) {
+        if (platform !== "darwin") fail("CREDENTIAL_PLATFORM_UNSUPPORTED");
+        if (!/^[a-f0-9-]{36}$/.test(scope || "")) fail("CREDENTIAL_SCOPE_REQUIRED");
+        this.service = "cn.feishu.cindy-task-plugin." + scope;
+        this.run = run;
+      }
+      key(key) {
+        if (!slots2.includes(key)) fail("APPLICATION_NOT_FOUND");
+        return key;
+      }
+      async read(key) {
+        const r = await this.run(["find-generic-password", "-s", this.service, "-a", this.key(key), "-w"]);
+        if (r.code === 44) return null;
+        if (r.code !== 0) fail("CREDENTIAL_STORE_UNAVAILABLE");
+        let v;
+        try {
+          v = JSON.parse(Buffer.from(r.out.trim(), "base64").toString("utf8"));
+        } catch {
+          fail("CREDENTIAL_INVALID");
+        }
+        if (v.nodeCredentialVersion !== 1 || !/^cli_[a-zA-Z0-9]+$/.test(v.identity || "") || typeof v.value !== "string" || !v.value || !v.revision) fail("CREDENTIAL_INVALID");
+        return v;
+      }
+      async commit(key, { appId, secret }) {
+        this.key(key);
+        if (!/^cli_[a-zA-Z0-9]+$/.test(appId || "") || typeof secret !== "string" || !secret) fail("CREDENTIAL_INVALID");
+        for (const other of slots2) {
+          const current = await this.read(other);
+          if (current && other !== key && current.identity === appId) fail("APPLICATION_ALREADY_BOUND");
+          if (current && other === key && current.identity !== appId) fail("APP_ID_MISMATCH");
+        }
+        const value = { nodeCredentialVersion: 1, identity: appId, value: secret, revision: randomUUID() };
+        const encoded = Buffer.from(JSON.stringify(value)).toString("base64");
+        await this.run(["-i"], "add-generic-password -U -s " + this.service + " -a " + key + " -w " + encoded + "\n");
+        const saved = await this.read(key);
+        if (saved?.revision !== value.revision) fail("CREDENTIAL_SAVE_UNKNOWN");
+        return { saved: true, appId, revision: saved.revision };
+      }
+      async remove(key) {
+        const r = await this.run(["delete-generic-password", "-s", this.service, "-a", this.key(key)]);
+        if (r.code !== 0 && r.code !== 44) fail("CREDENTIAL_STORE_UNAVAILABLE");
+        if (await this.read(key)) fail("CREDENTIAL_REMOVAL_UNVERIFIED");
+        return { removed: true };
+      }
+    };
+    module2.exports = { CredentialStore: CredentialStore2 };
   }
 });
 
@@ -127829,19 +127915,8 @@ function getListener(key) {
   return listeners.get(key);
 }
 var authorizing = /* @__PURE__ */ new Set();
-function credential(request, key) {
-  const raw = request.cindy?.secrets?.[key];
-  if (!raw) return null;
-  let v;
-  try {
-    v = JSON.parse(raw);
-  } catch {
-    throw Object.assign(Error("CREDENTIAL_INVALID"), { code: "CREDENTIAL_INVALID" });
-  }
-  if (v.nodeCredentialVersion !== 1 || !/^cli_[a-zA-Z0-9]+$/.test(v.identity || "") || !v.value || !v.revision)
-    throw Object.assign(Error("CREDENTIAL_INVALID"), { code: "CREDENTIAL_INVALID" });
-  return v;
-}
+var authorizationControls = /* @__PURE__ */ new Map();
+var { CredentialStore } = require_credential_store();
 async function handle(request) {
   const runtime = globalThis.__CINDY_NODE__;
   if (request.method === "runtime/capabilities") return { version: 1, authorization: typeof runtime?.bindAuthorization === "function", hostServicesEntry: typeof runtime?.bindHostServices === "function", childSpawn: typeof runtime?.spawnEntry === "function" };
@@ -127849,49 +127924,74 @@ async function handle(request) {
   const key = authIndex >= 0 ? slots[authIndex] : request.params?.credentialKey || "account";
   if (!slots.includes(key)) throw Object.assign(Error("APPLICATION_NOT_FOUND"), { code: "APPLICATION_NOT_FOUND" });
   if (authIndex >= 0 && request.params?.credentialKey && request.params.credentialKey !== key) throw Object.assign(Error("APP_ID_MISMATCH"), { code: "APP_ID_MISMATCH" });
-  const needsHost = authIndex >= 0 || request.method === "feishu/action" && request.params?.action === "upload";
-  const host = needsHost ? runtime?.bindHostServices?.() : void 0;
-  const current = credential(request, key);
+  if (authIndex < 0 && !["binding/restore", "binding/remove", "binding/cancel", "listener/stop", "listener/ack", "listener/run", "feishu/action"].includes(request.method)) throw Object.assign(Error("METHOD_NOT_FOUND"), { code: "METHOD_NOT_FOUND" });
+  if (request.method === "binding/cancel") {
+    const control2 = authorizationControls.get(key);
+    control2?.abort();
+    if (control2) await control2.finished;
+    return { stopped: true };
+  }
   const listener = getListener(key);
-  if (request.method === "binding/restore") return { hostServices: typeof globalThis.__CINDY_NODE__?.bindHostServices === "function", ...current ? { saved: true, appId: current.identity, revision: current.revision } : { saved: false } };
-  if (authIndex >= 0) {
-    if (authorizing.size) throw Object.assign(Error("AUTHORIZATION_BUSY"), { code: "AUTHORIZATION_BUSY" });
-    if (current && request.params?.appId && request.params.appId !== current.identity) throw Object.assign(Error("APP_ID_MISMATCH"), { code: "APP_ID_MISMATCH" });
-    const authorize = globalThis.__CINDY_NODE__?.bindAuthorization?.();
-    const store = host ? {
-      commit: async ({ appId, secret }) => {
-        if (slots.some((other) => other !== key && credential(request, other)?.identity === appId)) throw Object.assign(Error("APPLICATION_ALREADY_BOUND"), { code: "APPLICATION_ALREADY_BOUND" });
-        const r = await host.saveCredential(key, secret, appId);
-        return { saved: r.saved, appId: r.identity, revision: r.revision };
-      },
-      restore: async () => current ? { saved: true, appId: current.identity, revision: current.revision } : { saved: false }
-    } : null;
-    authorizing.add(key);
-    try {
+  if (request.method === "listener/stop") return listener.stop();
+  if (request.method === "listener/ack") return listener.ack(request.params);
+  const needsHost = request.method === "feishu/action" && request.params?.action === "upload";
+  const host = needsHost ? runtime?.bindHostServices?.() : void 0;
+  const settings = authIndex >= 0 && request.params?.authorizationMode === "settings";
+  const authorize = settings ? async (value) => {
+    const url = new URL(value.url);
+    if (url.protocol !== "https:" || url.hostname !== "open.feishu.cn" || url.username || url.password) throw Error("AUTHORIZATION_URL_INVALID");
+    reply({ jsonrpc: "2.0", method: "binding/authorization", params: { credentialKey: key, token: request.params.token, url: url.href } });
+  } : authIndex >= 0 ? runtime?.bindAuthorization?.() : void 0;
+  const store = new CredentialStore(request.params?.credentialScope);
+  const mutating = authIndex >= 0 || request.method === "binding/remove";
+  if (mutating && authorizing.size) throw Object.assign(Error("AUTHORIZATION_BUSY"), { code: "AUTHORIZATION_BUSY" });
+  if (mutating) authorizing.add(key);
+  const control = authIndex >= 0 ? new AbortController() : void 0;
+  if (control) {
+    control.finished = new Promise((resolve) => {
+      control.finish = resolve;
+    });
+    authorizationControls.set(key, control);
+  }
+  try {
+    if (request.method === "binding/remove") {
+      await listener.stop();
+      return store.remove(key);
+    }
+    const current = await store.read(key);
+    if (request.method === "binding/restore") return { hostServices: typeof globalThis.__CINDY_NODE__?.bindHostServices === "function", ...current ? { saved: true, appId: current.identity, revision: current.revision } : { saved: false } };
+    if (authIndex >= 0) {
+      if (current && request.params?.appId && request.params.appId !== current.identity) throw Object.assign(Error("APP_ID_MISMATCH"), { code: "APP_ID_MISMATCH" });
       return await new DeviceBinding({
         authorize,
-        signal: host?.signal,
+        signal: control.signal,
         registerApp: require_lib2().registerApp,
-        store,
-        saveState: async () => {
+        store: { commit: (value) => store.commit(key, value), restore: async () => {
+          const v = await store.read(key);
+          return v ? { saved: true, appId: v.identity, revision: v.revision } : { saved: false };
+        } },
+        saveState: async (value) => {
+          if (settings) reply({ jsonrpc: "2.0", method: "binding/status", params: { credentialKey: key, token: request.params.token, state: value.state } });
         },
         verify: async ({ appId, secret }) => {
           await require_feishu().action({ action: "check", appId }, secret);
           return { appId, scopesGranted: false };
         }
       }).run({ ...request.params, ...current ? { appId: current.identity } : {} });
-    } finally {
+    }
+    if (!["listener/run", "feishu/action"].includes(request.method)) throw Object.assign(Error("METHOD_NOT_FOUND"), { code: "METHOD_NOT_FOUND" });
+    if (!current) throw Object.assign(Error("CONNECTION_REQUIRED"), { code: "CONNECTION_REQUIRED" });
+    if (request.params?.appId !== current.identity) throw Object.assign(Error("APP_ID_MISMATCH"), { code: "APP_ID_MISMATCH" });
+    if (request.method === "listener/run") return listener.run(request.params, current.value);
+    if (request.method === "feishu/action") return require_feishu().action(request.params, current.value, fetch, host);
+    throw Object.assign(new Error("METHOD_NOT_FOUND"), { code: "METHOD_NOT_FOUND" });
+  } finally {
+    if (mutating) {
       authorizing.delete(key);
+      authorizationControls.delete(key);
+      control?.finish();
     }
   }
-  if (request.method === "listener/stop") return listener.stop();
-  if (request.method === "listener/ack") return listener.ack(request.params);
-  if (!["listener/run", "feishu/action"].includes(request.method)) throw Object.assign(Error("METHOD_NOT_FOUND"), { code: "METHOD_NOT_FOUND" });
-  if (!current) throw Object.assign(Error("CONNECTION_REQUIRED"), { code: "CONNECTION_REQUIRED" });
-  if (request.params?.appId !== current.identity) throw Object.assign(Error("APP_ID_MISMATCH"), { code: "APP_ID_MISMATCH" });
-  if (request.method === "listener/run") return listener.run(request.params, current.value);
-  if (request.method === "feishu/action") return require_feishu().action(request.params, current.value, fetch, host);
-  throw Object.assign(new Error("METHOD_NOT_FOUND"), { code: "METHOD_NOT_FOUND" });
 }
 var input = readline.createInterface({ input: process.stdin });
 input.on("line", async (line) => {
@@ -127918,6 +128018,7 @@ input.on("line", async (line) => {
   }
 });
 input.on("close", () => {
+  for (const control of authorizationControls.values()) control.abort();
   for (const listener of listeners.values()) listener.stop();
 });
 process.on("SIGTERM", () => {

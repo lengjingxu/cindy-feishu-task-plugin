@@ -17,7 +17,7 @@ function runtime(id){
     return send();
    });dispatchTail=p.catch(()=>{});return p;
   },
-  rawNode:r=>cindy.node.request(r),assertUnique:appId=>apps.assertUnique(id,appId),
+  rawNode:r=>cindy.node.request({...r,params:{...r.params,credentialScope:apps.state.credentialScope}}),assertUnique:appId=>apps.assertUnique(id,appId),
   canOperate:method=>{
    const status=apps.get(id).status;
    if(['state','targets','listener/stop'].includes(method))return;
@@ -60,22 +60,34 @@ async function ui(action,args={}){
   if(!['disconnect','delete'].includes(args.mode))fail('ACTION_UNSUPPORTED');
   if(latest.status==='active')await r.prepareRemoval();
   await apps.status(id,args.mode==='delete'?'deleting':'disconnecting');
-  return {credentialKey:a.slot};
+  return {credentialKey:a.slot,credentialScope:apps.state.credentialScope};
  });
  if(action==='finish-removal')return manage(async()=>{
   const current=apps.get(id);if(!['deleting','disconnecting'].includes(current.status))fail('REMOVAL_NOT_STARTED');
-  const check=await cindy.node.request({method:'binding/restore',params:{credentialKey:a.slot},timeoutMs:30000});
+  const removed=await cindy.node.request({method:'binding/remove',params:{credentialKey:a.slot,credentialScope:apps.state.credentialScope},timeoutMs:30000});
+  if(!removed.ok)fail('CREDENTIAL_REMOVAL_UNVERIFIED');
+  const check=await cindy.node.request({method:'binding/restore',params:{credentialKey:a.slot,credentialScope:apps.state.credentialScope},timeoutMs:30000});
   if(!check.ok||check.result?.saved!==false)fail('CREDENTIAL_REMOVAL_UNVERIFIED');
   await apps.status(id,current.status==='deleting'?'deleted':'disconnected');r.disconnected();return state();
  });
+ if(action==='authorize-binding'){
+  const reservation=bindingReservations.get(id);if(!reservation||reservation.token!==args.token)fail('AUTHORIZATION_REQUIRED');
+  const result=await cindy.node.request({method:a.slot==='account'?'binding/authorize':'binding/authorize'+a.slot.slice(7),params:{credentialKey:a.slot,credentialScope:apps.state.credentialScope,authorizationMode:'settings',token:reservation.token,...(a.state.connection?.appId?{appId:a.state.connection.appId}:{})},timeoutMs:120000,maxTotalMs:300000});
+  if(!result.ok)fail(result.errorCode||result.error?.message||'AUTHORIZATION_FAILED');return result.result;
+ }
+ if(action==='cancel-binding'){
+  const reservation=bindingReservations.get(id);if(!reservation||reservation.token!==args.token)fail('AUTHORIZATION_REQUIRED');
+  const result=await cindy.node.request({method:'binding/cancel',params:{credentialKey:a.slot},timeoutMs:30000});
+  if(!result.ok)fail('AUTHORIZATION_CANCEL_FAILED');return result.result;
+ }
  if(action==='end-binding'){const reservation=bindingReservations.get(id);if(reservation?.token===args.token)bindingReservations.delete(id);return {ended:true};}
  if(action==='begin-binding')return manage(async()=>{
   if(!['active','disconnected'].includes(apps.get(id).status))fail('APPLICATION_DISCONNECTED');
   const reservation=bindingReservations.get(id);
-  if(reservation&&reservation.expiresAt>Date.now())return {...reservation,credentialKey:a.slot,appId:apps.get(id).state.connection?.appId};
+  if(reservation&&reservation.expiresAt>Date.now())return {...reservation,credentialKey:a.slot,credentialScope:apps.state.credentialScope,appId:apps.get(id).state.connection?.appId};
   await r.ready();await r.ui(action,args);
   const next={token:crypto.randomUUID(),expiresAt:Date.now()+300000};bindingReservations.set(id,next);
-  return {...next,credentialKey:a.slot,appId:apps.get(id).state.connection?.appId};
+  return {...next,credentialKey:a.slot,credentialScope:apps.state.credentialScope,appId:apps.get(id).state.connection?.appId};
  });
  if(action==='binding-complete')return manage(async()=>{
   if(!['active','disconnected'].includes(apps.get(id).status))fail('APPLICATION_DISCONNECTED');
@@ -98,8 +110,13 @@ cindy.onHostMessage(async msg=>{
   if(msg.type==='event'&&msg.name==='node-notification'){
    await ready();
    const key=msg.params?.credentialKey||'account';
-   const a=apps.entries().find(a=>a.slot===key&&a.status==='active');
-   if(a)await runtime(a.id).onMessage(msg);return;
+   const a=apps.entries().find(a=>a.slot===key&&a.status!=='deleted');
+   if(msg.method==='binding/authorization'){
+    const reservation=a&&bindingReservations.get(a.id);
+    if(reservation&&reservation.token===msg.params?.token)channel.postMessage({type:'binding-authorization',applicationId:a.id,token:reservation.token,url:msg.params.url});
+    return;
+   }
+   if(a?.status==='active')await runtime(a.id).onMessage(msg);return;
   }
   if(msg.type!=='tool-call')return;
   if(msg.tool==='inspect_host_support'){

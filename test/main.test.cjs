@@ -39,6 +39,7 @@ async function multiFixture(seed,{nameRead}={}){
  class Channel{constructor(){channel=this}postMessage(v){replies.push(v)}}
  const cindy={fs:async r=>{if(r.op==='read')return files.has(r.path)?{ok:true,content:files.get(r.path)}:{ok:false,errorCode:'NOT_FOUND'};files.set(r.path,r.content);return{ok:true}},targets:{list:async()=>({targets:[]}),resolve:async p=>p.target,capabilities:async()=>({delegation:{version:1,execution:true}}),send:async p=>{sent.push(p);return{accepted:true,taskId:p.target.id+'-session'}}},node:{request:async r=>{
   nodeCalls.push(r);const p=r.params||{};
+  if(r.method==='binding/remove'){delete identities[p.credentialKey];return{ok:true,result:{removed:true}};}
   if(r.method==='binding/restore')return{ok:true,result:identities[p.credentialKey]?{saved:true,appId:identities[p.credentialKey],hostServices:true}:{saved:false,hostServices:true}};
   if(r.method==='feishu/action'&&p.action==='check')return{ok:true,result:{authenticated:p.appId===identities[p.credentialKey]}};
   if(r.method==='feishu/action'&&p.action==='app_profile')return nameRead?nameRead(p):{ok:true,result:{appId:identities[p.credentialKey],name:'应用 '+p.credentialKey,source:'bot/v3/info'}};
@@ -63,8 +64,8 @@ test('multi-app settings keep separate partners; disconnect/delete require verif
  await h.ui('select-partner',{applicationId:id,target:{kind:'bot',id:'new'}});
  s=await h.ui('state');assert.equal(s.result.applications[0].binding.partnerId,'old');assert.equal(s.result.applications[1].binding.partnerId,'new');
  assert.equal((await h.ui('prepare-removal',{applicationId:id,mode:'disconnect'})).result.credentialKey,'account2');
- assert.equal((await h.ui('finish-removal',{applicationId:id})).error.code,'CREDENTIAL_REMOVAL_UNVERIFIED');
- delete h.identities.account2;assert.equal((await h.ui('finish-removal',{applicationId:id})).ok,true);
+ assert.equal(h.identities.account2,'cli_0000000000000002');
+ assert.equal((await h.ui('finish-removal',{applicationId:id})).ok,true);
  s=await h.ui('state');assert.equal(s.result.applications[1].status,'disconnected');assert.equal(s.result.applications[0].connectionAuthenticated,true);
  const before=h.nodeCalls.length;assert.equal((await h.ui('test-connection',{applicationId:id,target:{kind:'bot',id:'new'}})).error.code,'APPLICATION_DISCONNECTED');assert.equal(h.nodeCalls.length,before);
  const binding=await h.ui('begin-binding',{applicationId:id});assert.equal(binding.result.appId,'cli_0000000000000002');
@@ -132,4 +133,15 @@ test('支持检查直接走无凭据Node方法，不冒充完整工作流已验�
  vm.runInNewContext(fs.readFileSync('plugin/main.js','utf8'),{cindy,BroadcastChannel:Channel,crypto:webcrypto,TextEncoder,Uint8Array,console});
  await receiver({type:'tool-call',tool:'inspect_host_support',callId:'inspect',args:{}});
  assert.equal(calls.length,1);assert.equal(replies[0].ok,true);assert.equal(replies[0].result.scopedDelegationProbe,false);assert.equal(replies[0].result.fullWorkflowVerified,false);assert.equal(replies[0].result.node.hostServicesEntry,false);
+});
+
+test('设置页授权只发公开Node请求，命名空间持久化且取消沿同一预留',async()=>{
+ const h=await multiFixture();await h.ui('state');
+ const begun=await h.ui('begin-binding',{applicationId:'account'});assert.equal(begun.ok,true);
+ const token=begun.result.token;
+ await h.ui('authorize-binding',{applicationId:'account',token});
+ const auth=h.nodeCalls.find(x=>x.method==='binding/authorize');assert(auth);assert.equal(auth.callId,undefined);assert.equal(auth.params.authorizationMode,'settings');assert.equal(auth.params.credentialScope,begun.result.credentialScope);assert(auth.params.credentialScope);
+ await h.ui('cancel-binding',{applicationId:'account',token});assert(h.nodeCalls.some(x=>x.method==='binding/cancel'));
+ const wrong=await h.ui('authorize-binding',{applicationId:'account',token:'wrong'});assert.equal(wrong.error.code,'AUTHORIZATION_REQUIRED');
+ const ledger=[...h.files.values()].map(x=>JSON.parse(x)).filter(x=>x.payload).map(x=>JSON.parse(x.payload));assert(ledger.some(x=>x.credentialScope===auth.params.credentialScope));
 });

@@ -4,7 +4,7 @@
   "name": "飞书任务",
   "description": "飞书任务工程预览：检查宿主支持，保留应用与任务看板；完整扫码、伙伴执行和文件回报尚不支持正式版。",
   "whenToUse": "检查飞书任务插件当前适配器的宿主入口支持，查看任务，或在已验证测试环境由原关联伙伴回报进度与产物。",
-  "version": "0.15.5",
+  "version": "0.15.6",
   "kind": "chip",
   "entry": "main.js",
   "icon": "assets/icon.png",
@@ -268,7 +268,7 @@
     },
     {
       "name": "bind_application",
-      "description": "测试适配器：通过 registerApp 添加飞书应用，再关联处理伙伴。当前适配器所用凭据写回扩展未在已核验正式版提供；不代表 SDK 授权天然需要该扩展。",
+      "description": "通过飞书 SDK 扫码注册或更新应用；凭据仅存插件自管 macOS 钥匙串。成功表示已领取保存并验证身份，不代表伙伴执行或文件回报已验收。",
       "parameters": {
         "type": "object",
         "properties": {
@@ -318,80 +318,6 @@
     "childSpawn": true,
     "entries": [
       "node/listener.cjs"
-    ],
-    "secretBindings": [
-      {
-        "key": "account",
-        "label": "飞书应用",
-        "methods": [
-          "binding/authorize",
-          "binding/authorize2",
-          "binding/authorize3",
-          "binding/authorize4",
-          "binding/restore",
-          "feishu/action",
-          "listener/run"
-        ],
-        "saveMethods": [
-          "binding/authorize"
-        ],
-        "url": "https://accounts.feishu.cn/",
-        "settingsMethod": "binding/authorize"
-      },
-      {
-        "key": "account2",
-        "label": "飞书应用2",
-        "methods": [
-          "binding/authorize",
-          "binding/authorize2",
-          "binding/authorize3",
-          "binding/authorize4",
-          "binding/restore",
-          "feishu/action",
-          "listener/run"
-        ],
-        "saveMethods": [
-          "binding/authorize2"
-        ],
-        "url": "https://accounts.feishu.cn/",
-        "settingsMethod": "binding/authorize2"
-      },
-      {
-        "key": "account3",
-        "label": "飞书应用3",
-        "methods": [
-          "binding/authorize",
-          "binding/authorize2",
-          "binding/authorize3",
-          "binding/authorize4",
-          "binding/restore",
-          "feishu/action",
-          "listener/run"
-        ],
-        "saveMethods": [
-          "binding/authorize3"
-        ],
-        "url": "https://accounts.feishu.cn/",
-        "settingsMethod": "binding/authorize3"
-      },
-      {
-        "key": "account4",
-        "label": "飞书应用4",
-        "methods": [
-          "binding/authorize",
-          "binding/authorize2",
-          "binding/authorize3",
-          "binding/authorize4",
-          "binding/restore",
-          "feishu/action",
-          "listener/run"
-        ],
-        "saveMethods": [
-          "binding/authorize4"
-        ],
-        "url": "https://accounts.feishu.cn/",
-        "settingsMethod": "binding/authorize4"
-      }
     ]
   },
   "command": "feishu-task",
@@ -415,7 +341,7 @@
       "accounts.feishu.cn"
     ]
   },
-  "releaseNotes": "新增无需凭据的宿主支持检查，Node仅在授权或上传请求捕获测试扩展。交付正式安装产物核验证据及最小协议方案；完整兼容版本尚未确定，本阶段仅交付源码，不提供完整兼容安装包。",
+  "releaseNotes": "应用设置扫码由插件 SDK 与公开 Node 通知完成；macOS 钥匙串保存多应用凭据，支持重启恢复及解除绑定。取消 Host 凭据写回依赖。完整伙伴执行与产物上传仍待配套 Host 联调，本阶段不发布安装包。",
   "setup": {
     "requires": []
   }

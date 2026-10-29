@@ -13,9 +13,13 @@ const button=(label,action)=>'<button data-action="'+action+'">'+label+'</button
 async function request(action,args={}){
  const wake=await fetch('/wake');if(!wake.ok)throw new Error('无法唤醒插件，请检查是否已启用。');
  const reqId=crypto.randomUUID();const msg={type:'request',reqId,action,args};
- return new Promise((resolve,reject)=>{const timer=setInterval(()=>channel.postMessage(msg),500);const timeout=setTimeout(()=>{clearInterval(timer);pending.delete(reqId);reject(new Error('操作结果未知，请刷新核对；不要重复提交。'));},45000);pending.set(reqId,{resolve,reject,timer,timeout});channel.postMessage(msg);});
+ return new Promise((resolve,reject)=>{const timer=setInterval(()=>channel.postMessage(msg),500);const timeout=setTimeout(()=>{clearInterval(timer);pending.delete(reqId);reject(new Error('操作结果未知，请刷新核对；不要重复提交。'));},action==='authorize-binding'?310000:45000);pending.set(reqId,{resolve,reject,timer,timeout});channel.postMessage(msg);});
 }
 channel.onmessage=({data})=>{
+ if(data.type==='binding-authorization'&&bindingFlow&&data.token===bindingFlow.token){
+  try{const url=new URL(data.url);if(url.protocol!=='https:'||url.hostname!=='open.feishu.cn'||url.username||url.password)throw Error('url');bindingFlow.url=url.href;render();}catch{notice.textContent='授权链接无效。';}return;
+ }
+
  const p=pending.get(data.reqId);if(p){clearInterval(p.timer);clearTimeout(p.timeout);pending.delete(data.reqId);data.ok?p.resolve(data.result):p.reject(Object.assign(new Error(data.error.message),{code:data.error.code}));}
  if(data.type==='error')notice.textContent=data.error.message;
  if(data.type==='changed'&&!busy)refresh().catch(e=>notice.textContent=e.message);
@@ -56,7 +60,7 @@ function render(){
   }else if(view.needsInitialization){
    content='<h3>添加飞书应用</h3>'+button('开始设置','initialize');
   }else if(onboarding.identity?.state!=='verified'){
-   content='<h3>添加飞书应用</h3>'+(view.hostServicesAvailable?button('绑定飞书应用','bind'):'<p role="status">当前 Cindy 缺少此插件的绑定接口</p>');
+   content='<h3>添加飞书应用</h3>'+button('绑定飞书应用','bind');
   }else if(!binding.partnerId||editingPartner){
    content='<h3>关联处理伙伴</h3><label>处理伙伴<select id="connection-partner">'+options()+'</select></label><div class="actions">'+button('保存执行伙伴','select-partner')+'</div>';
   }else if(onboarding.permissions?.state==='verified' && onboarding.registration?.state!=='verified' && onboarding.registration?.runtime?.state!=='verified'){
@@ -85,35 +89,12 @@ function render(){
  if(focusId)document.getElementById(focusId)?.focus();else if(focusTask)[...app.querySelectorAll('[data-task]')].find(x=>x.dataset.task===focusTask)?.focus();else if(focusHeading&&detail)app.querySelector('.task-heading h1')?.focus();
 }
 async function bindFromSettings(){
- const context=await request('begin-binding',appArgs());
- const key=context.credentialKey||'account';
- if(!/^account[234]?$/.test(key))throw new Error('应用连接无效');
- const control=new AbortController();const flow={control,url:null};bindingFlow=flow;render();
- let saved=false;
+ const args=appArgs(),context=await request('begin-binding',args);
+ const flow={url:null,token:context.token,applicationId:args.applicationId};bindingFlow=flow;render();
  try{
-  const r=await fetch('/node-authorization/'+key,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({...appArgs(),credentialKey:key,...(context.appId?{appId:context.appId}:{})}),signal:control.signal});
-  if(!r.ok)throw new Error(r.status===404?'当前 Cindy 缺少此插件的绑定接口。':'应用绑定请求失败（HTTP '+r.status+'）。');
-  if(!r.headers.get('content-type')?.includes('application/x-ndjson'))throw new Error('应用绑定响应格式不受支持。');
-  const reader=r.body.getReader(), decoder=new TextDecoder();let buffer='';
-  for(;;){
-   const part=await reader.read();if(part.done)break;buffer+=decoder.decode(part.value,{stream:true});
-   if(buffer.length>32768)throw new Error('授权响应无效。');
-   let end;while((end=buffer.indexOf('\n'))>=0){
-    const value=JSON.parse(buffer.slice(0,end));buffer=buffer.slice(end+1);
-    if(bindingFlow!==flow||control.signal.aborted)return;
-    if(value.state==='authorize'){
-     const url=new URL(value.url);if(url.protocol!=='https:'||url.username||url.password||url.hostname!=='open.feishu.cn')throw new Error('授权链接无效。');
-     flow.url=url.href;notice.textContent='';render();
-    }else if(value.state==='saved'){saved=true;flow.url=null;}
-    else if(value.state==='failed')throw new Error('绑定未完成，请重试。');
-   }
-  }
-  if(!saved&&!control.signal.aborted){
-   await refresh();
-   if(!currentApplication().connectionAuthenticated)throw new Error('授权已结束，请重试。');
-  }
-  if(saved){await request('binding-complete',appArgs());await refresh();}
- }finally{control.abort();if(bindingFlow===flow)bindingFlow=null;await request('end-binding',{...appArgs(),token:context.token}).catch(()=>{});}
+  await request('authorize-binding',{...args,token:context.token});
+  if(bindingFlow===flow){await request('binding-complete',args);await refresh();}
+ }finally{if(bindingFlow===flow)bindingFlow=null;await request('end-binding',{...args,token:context.token}).catch(()=>{});render();}
 }
 const detailLoads=new Map();
 async function loadTask(t){if(!t||detailLoads.has(taskKey(t)))return;const key=taskKey(t);detailLoads.set(key,true);try{const r=await request('inspect-task',{id:t.id,...(t.applicationId?{applicationId:t.applicationId}:{})});state=r;render();}catch(e){if(detail&&selected===key)notice.textContent=e.message;}finally{detailLoads.delete(key);}}
@@ -122,7 +103,7 @@ document.addEventListener('keydown',e=>{if(e.key==='Escape'&&detail){detail=fals
 window.addEventListener('focus',()=>{if(!busy)refresh().catch(e=>notice.textContent=e.message);});
 document.addEventListener('click',async e=>{
  const b=e.target.closest('button');if(!b)return;
- if(b.dataset.action==='cancel-binding'){bindingFlow?.control.abort();bindingFlow=null;notice.textContent='';render();return;}
+ if(b.dataset.action==='cancel-binding'){const flow=bindingFlow;try{if(flow)await request('cancel-binding',{applicationId:flow.applicationId,token:flow.token});bindingFlow=null;notice.textContent='';await refresh();}catch(err){notice.textContent=err.message;}render();return;}
  if(busy)return;
  if(b.dataset.page){page=b.dataset.page;detail=false;if(page==='connection'){application=null;removing=null;editingPartner=false;}render();return;}
  if(b.dataset.application){application=b.dataset.application;removing=null;editingPartner=false;render();return;}
@@ -153,8 +134,6 @@ document.addEventListener('click',async e=>{
    const view=currentApplication();
    const r=await request('prepare-removal',{...appArgs(),mode:action==='confirm-removal'?removing:view.status==='deleting'?'delete':'disconnect'});
    if(!/^account[234]?$/.test(r.credentialKey))throw new Error('应用连接无效');
-   const response=await fetch('/secrets/'+r.credentialKey,{method:'DELETE'});
-   if(!response.ok)throw new Error('移除未完成，请重试。');
    await request('finish-removal',appArgs());removing=null;application=null;await refresh();return;
   }
   if(action==='bind'){await bindFromSettings();notice.textContent='';return;}
@@ -167,3 +146,5 @@ document.addEventListener('click',async e=>{
  catch(err){notice.textContent=err.name==='AbortError'?'':err.message;if(['confirm-removal','finish-removal'].includes(action)){removing=null;await refresh().catch(()=>{});}}finally{busy=false;render();}
 });
 (async()=>{try{state=await request('state');const r=await request('targets');targets=r.targets;render();}catch(e){state.needsInitialization=e.code==='LEDGER_NOT_INITIALIZED';notice.textContent=state.needsInitialization?'':e.message;page='connection';render();}})();
+
+window.addEventListener('pagehide',()=>{if(bindingFlow)channel.postMessage({type:'request',reqId:crypto.randomUUID(),action:'cancel-binding',args:{applicationId:bindingFlow.applicationId,token:bindingFlow.token}});});

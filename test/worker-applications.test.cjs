@@ -4,11 +4,11 @@ function fixture({forbidCapture=false}={}){
  let input,appId='cli_third',seq=0;const output=[],actions=[],saved=[],listeners=[];
  const host={saveCredential:async(key,value,identity)=>{saved.push({key,value,identity});return{saved:true,identity,revision:'r2'}}};
  class Listener {constructor(spawn,notify){this.notify=notify;listeners.push(this);}async run(p,secret){this.secret=secret;this.notify('listener/status',{state:'connected'});return{reason:'test'};}stop(){this.stopped=true;return{stopping:true}}ack(){return{forwarded:true}}}
- const requireMock=name=>name==='node:readline'?{createInterface:()=>({on:(event,fn)=>{if(event==='line')input=fn;}})}:name==='./listener-proxy.cjs'?{ListenerProxy:Listener}:name==='@larksuiteoapi/node-sdk'?{registerApp:async opts=>{opts.onQRCodeReady({url:'https://open.feishu.cn/test',expireIn:60});return{client_id:appId,client_secret:'synthetic-new'}}}:name==='./feishu.cjs'?{action:async(params,secret)=>{actions.push({params,secret});return{authenticated:true}}}:require('../src/'+name.replace('./',''));
+ const requireMock=name=>name==='./credential-store.cjs'?{CredentialStore:class {async read(key){return secrets[key]?JSON.parse(secrets[key]):null;}async commit(key,{appId,secret}){for(const [k,v]of Object.entries(secrets))if(k!==key&&JSON.parse(v).identity===appId)throw Error('duplicate');saved.push({key,value:secret,identity:appId});secrets[key]=JSON.stringify({nodeCredentialVersion:1,identity:appId,value:secret,revision:'r2'});return {saved:true,appId,revision:'r2'};}async remove(key){delete secrets[key];return{removed:true};}}}:name==='node:readline'?{createInterface:()=>({on:(event,fn)=>{if(event==='line')input=fn;}})}:name==='./listener-proxy.cjs'?{ListenerProxy:Listener}:name==='@larksuiteoapi/node-sdk'?{registerApp:async opts=>{opts.onQRCodeReady({url:'https://open.feishu.cn/test',expireIn:60});return{client_id:appId,client_secret:'synthetic-new'}}}:name==='./feishu.cjs'?{action:async(params,secret)=>{actions.push({params,secret});return{authenticated:true}}}:require('../src/'+name.replace('./',''));
  const processMock={stdin:{},stdout:{write:s=>output.push(JSON.parse(s))},on(){}};
- vm.runInNewContext(fs.readFileSync('src/worker.cjs','utf8'),{require:requireMock,process:processMock,__CINDY_NODE__:{bindHostServices:()=>{if(forbidCapture)assert.fail('unnecessary capture');return host;},bindAuthorization:()=>async()=>{}},fetch:()=>assert.fail('network'),AbortController,setTimeout,clearTimeout,console});
+ vm.runInNewContext(fs.readFileSync('src/worker.cjs','utf8'),{require:requireMock,process:processMock,__CINDY_NODE__:{bindHostServices:()=>{if(forbidCapture)assert.fail('unnecessary capture');return host;},bindAuthorization:()=>async()=>{}},fetch:()=>assert.fail('network'),URL,AbortController,setTimeout,clearTimeout,console});
  const secrets={account:JSON.stringify({nodeCredentialVersion:1,identity:'cli_first',value:'synthetic-first',revision:'r1'}),account2:JSON.stringify({nodeCredentialVersion:1,identity:'cli_second',value:'synthetic-second',revision:'r1'})};
- return {actions,saved,listeners,output,secrets,setApp:id=>{appId=id},call:async(method,params={},credentials=secrets)=>{const id=++seq;await input(JSON.stringify({jsonrpc:'2.0',id,method,params,cindy:{secrets:credentials}}));return output.find(x=>x.id===id);}};
+ return {actions,saved,listeners,output,secrets,setApp:id=>{appId=id},call:async(method,params={},credentials=secrets)=>{for(const k of Object.keys(secrets))if(!credentials[k])delete secrets[k];const id=++seq;await input(JSON.stringify({jsonrpc:'2.0',id,method,params,cindy:{secrets:credentials}}));return output.find(x=>x.id===id);}};
 }
 test('worker restores and sends with exactly selected app; listener stop and notifications are isolated',async()=>{
  const f=fixture();const restored=await f.call('binding/restore',{credentialKey:'account2'});assert.equal(restored.result.appId,'cli_second');assert(!JSON.stringify(restored).includes('synthetic'));
@@ -38,4 +38,14 @@ test('恢复身份和普通飞书请求不捕获授权/上传扩展',async()=>{
  assert.equal((await f.call('binding/restore',{credentialKey:'account2'})).result.appId,'cli_second');
  assert.equal((await f.call('feishu/action',{credentialKey:'account2',appId:'cli_second',action:'get'})).result.authenticated,true);
  assert.equal(f.actions.length,1);assert.equal(f.saved.length,0);
+});
+
+test('设置页扫码通过公开Node通知返回用户URL，不捕获Host凭据服务',async()=>{
+ const f=fixture({forbidCapture:true});
+ const result=await f.call('binding/authorize3',{credentialKey:'account3',authorizationMode:'settings',token:'reservation'});
+ assert.equal(result.result.appId,'cli_third');
+ const qr=f.output.find(x=>x.method==='binding/authorization');assert.equal(qr.params.token,'reservation');assert.match(qr.params.url,/^https:\/\/open.feishu.cn\//);
+ assert(!JSON.stringify(f.output).includes('synthetic-new'));assert.equal(f.saved.length,1);
+ assert.equal((await f.call('binding/remove',{credentialKey:'account3'})).result.removed,true);
+ assert.equal((await f.call('binding/restore',{credentialKey:'account3'})).result.saved,false);
 });

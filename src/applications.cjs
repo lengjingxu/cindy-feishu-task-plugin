@@ -10,6 +10,7 @@ class Applications {
  async load(){
   let state;try{state=await this.journal.load();}catch(e){if(e.code!=='LEDGER_NOT_INITIALIZED')throw e;await this.journal.initialize();state=await this.journal.load();}
   this.state=state.applicationsVersion===1?state:{...initial(),applicationsVersion:1,applications:{account:{id:'account',slot:'account',status:'active',state}}};
+  if(!this.state.credentialScope)await this.change(n=>{n.credentialScope=this.uuid();});
  }
  get(id){const a=this.state.applications[id];if(!a)fail('APPLICATION_NOT_FOUND');return a;}
  entries(){return Object.values(this.state.applications);}
