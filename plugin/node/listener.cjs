@@ -112763,6 +112763,21 @@ var require_core = __commonJS({
         let caps = await this.targets.capabilities();
         (caps?.delegation?.version !== 1 || caps.delegation.execution !== !0) && fail("HOST_DELEGATION_UNAVAILABLE");
       }
+      async inspectExecution(id) {
+        return this.serial(async () => {
+          let t = this.task(id);
+          if (!t.dispatch) return clone(t);
+          let caps = await this.targets.capabilities?.();
+          (caps?.delegation?.version !== 1 || caps.delegation.receiptQuery !== !0 || caps.delegation.settled !== !0 || typeof this.targets.get != "function") && fail("HOST_RECEIPT_QUERY_UNAVAILABLE");
+          let receipt = await this.targets.get({ requestKey: t.dispatch.requestKey });
+          if (receipt?.found === !1) return clone(t);
+          (receipt?.found !== !0 || receipt.requestKey !== t.dispatch.requestKey || receipt.target?.kind !== t.dispatch.target.kind || receipt.target?.id !== t.dispatch.target.id || typeof receipt.executionId != "string" || !receipt.executionId.startsWith("plugin-target:") || t.receipt?.executionId && receipt.executionId !== t.receipt.executionId || t.executionReceipt?.executionId && receipt.executionId !== t.executionReceipt.executionId || t.targetTaskId && receipt.taskId !== t.targetTaskId || !["pending", "accepted", "cancelled"].includes(receipt.status) || typeof receipt.settled != "boolean") && fail("EXECUTION_RECEIPT_MISMATCH");
+          let executed = receipt.status === "accepted" || receipt.status === "pending" && receipt.settled && receipt.result;
+          executed && (typeof receipt.taskId != "string" || !receipt.taskId) && fail("EXECUTION_RECEIPT_MISMATCH"), receipt.settled && receipt.status !== "cancelled" && (!receipt.result || !["completed", "failed", "cancelled", "interrupted"].includes(receipt.result.outcome) || typeof receipt.result.instanceId != "string" || !receipt.result.instanceId || !Number.isSafeInteger(receipt.result.generation) || receipt.result.generation < 0) && fail("EXECUTION_RECEIPT_MISMATCH");
+          let next = clone(this.state), n = next.tasks[id];
+          return n.executionReceipt = receipt, executed && ["dispatching", "uncertain"].includes(n.state) && (n.targetTaskId = receipt.taskId, n.receipt = { accepted: !0, ...receipt }, n.state = "delivered", delete n.error), receipt.settled && (["stopped", "cancel_check"].includes(n.state) || receipt.status === "cancelled" && ["dispatching", "uncertain"].includes(n.state)) && (n.orphanedDelivery = !1, n.state = "stopped"), await this.save(next), clone(n);
+        });
+      }
       async settleStopped() {
         for (let t of Object.values(this.state.tasks))
           t.dispatch && (t.orphanedDelivery || t.state === "cancel_check") && await this.cancel(t.id);
