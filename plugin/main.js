@@ -270,11 +270,12 @@
             const receipt = await this.targets.get({ requestKey: t.dispatch.requestKey });
             if (receipt?.found === false) return clone(t);
             if (receipt?.found !== true || receipt.requestKey !== t.dispatch.requestKey || receipt.target?.kind !== t.dispatch.target.kind || receipt.target?.id !== t.dispatch.target.id || typeof receipt.executionId !== "string" || !receipt.executionId.startsWith("plugin-target:") || t.receipt?.executionId && receipt.executionId !== t.receipt.executionId || t.executionReceipt?.executionId && receipt.executionId !== t.executionReceipt.executionId || t.targetTaskId && receipt.taskId !== t.targetTaskId || !["pending", "accepted", "cancelled"].includes(receipt.status) || typeof receipt.settled !== "boolean") fail("EXECUTION_RECEIPT_MISMATCH");
-            if (receipt.status === "accepted" && (typeof receipt.taskId !== "string" || !receipt.taskId)) fail("EXECUTION_RECEIPT_MISMATCH");
+            const executed = receipt.status === "accepted" || receipt.status === "pending" && receipt.settled && receipt.result;
+            if (executed && (typeof receipt.taskId !== "string" || !receipt.taskId)) fail("EXECUTION_RECEIPT_MISMATCH");
             if (receipt.settled && receipt.status !== "cancelled" && (!receipt.result || !["completed", "failed", "cancelled", "interrupted"].includes(receipt.result.outcome) || typeof receipt.result.instanceId !== "string" || !receipt.result.instanceId || !Number.isSafeInteger(receipt.result.generation) || receipt.result.generation < 0)) fail("EXECUTION_RECEIPT_MISMATCH");
             const next = clone(this.state), n = next.tasks[id];
             n.executionReceipt = receipt;
-            if (receipt.status === "accepted" && ["dispatching", "uncertain"].includes(n.state)) {
+            if (executed && ["dispatching", "uncertain"].includes(n.state)) {
               n.targetTaskId = receipt.taskId;
               n.receipt = { accepted: true, ...receipt };
               n.state = "delivered";

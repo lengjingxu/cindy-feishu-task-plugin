@@ -132,3 +132,8 @@ test('未知投递已被Host取消并settled后解除占位，不保留永久忙
  const f=await fixture();f.targets.send=async p=>{f.sends.push(p);throw Error('timeout')};await assigned(f);
  queryable(f,{status:'cancelled',settled:true});assert.equal((await f.b.inspectExecution('task-1')).state,'stopped');assert.equal(f.sends.length,1);assert.equal(f.writes.length,0);
 });
+test('Host accept持久化失败但原输入已有终态时仍可恢复回报身份',async()=>{
+ const f=await fixture();f.targets.send=async()=>{throw Error('store accept failed')};await assigned(f);
+ queryable(f,{status:'pending',settled:true,result:{outcome:'completed',instanceId:'native',generation:2}});
+ const r=await f.b.inspectExecution('task-1');assert.equal(r.state,'delivered');assert.equal(r.targetTaskId,'canonical-1');assert.equal(r.executionReceipt.status,'pending');assert.equal(f.writes.length,0);
+});
