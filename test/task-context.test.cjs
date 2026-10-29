@@ -8,7 +8,7 @@ async function fixture(extra={}){
  let now=1000,n=0,data={...initial(),connection:{appId:'app',partnerId:'bot'}},sends=[];
  const snapshots={[parent]:{title:'预约测试',description:'只做当前任务',createdAt:1,assigned:true,soleAppAssignee:true,done:false,textDeliveries:[],attachments:[],...metadata({}),...extra}};
  const store={load:async()=>copy(data),save:async s=>{data=copy(s)}};
- const targets={capabilities:async()=>({delegation:{version:1,execution:true}}),resolve:async p=>p.target,send:async p=>{sends.push(p);return{accepted:true,taskId:'session'}},cancel:async()=>({cancelled:false})};
+ const targets={get:async()=>({found:false}),capabilities:async()=>({delegation:{version:1,execution:true,receiptQuery:true,settled:true}}),resolve:async p=>p.target,send:async p=>{sends.push(p);return{executionId:'plugin-target:execution',requestKey:p.requestKey,target:p.target,delivery:'queue',accepted:true,taskId:'session'}},cancel:async()=>({cancelled:false})};
  const remote={get:async id=>copy(snapshots[id]),matches:(s,o)=>o.kind==='text'?s.textDeliveries.includes(o.value):o.kind==='progress'?s.agentStatus===o.value.status&&s.agentProgress===o.value.message:s.done&&s.agentStatus===4,write:async(id,o)=>{const s=snapshots[id];if(o.kind==='text')s.textDeliveries.push(o.value);else if(o.kind==='progress'){s.agentStatus=o.value.status;s.agentProgress=o.value.message;}else{s.done=true;s.agentStatus=4;s.repeatRule='';}}};
  const make=()=>new Bridge({store,targets,remote,uuid:()=>String(++n),now:()=>now}),b=make();await b.load();
  const add=async(id=parent)=>{await b.ingest({id:'event'+ ++n,guid:id,appId:'app',isCreate:true,baseline:0});const key=Object.keys(b.state.events).at(-1);await b.refresh(key);};

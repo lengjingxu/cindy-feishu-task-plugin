@@ -258,7 +258,7 @@ var require_core = __commonJS({
       async assertExecution() {
         if (typeof this.targets.capabilities !== "function") fail("HOST_DELEGATION_UNAVAILABLE");
         const caps = await this.targets.capabilities();
-        if (caps?.delegation?.version !== 1 || caps.delegation.execution !== true) fail("HOST_DELEGATION_UNAVAILABLE");
+        if (caps?.delegation?.version !== 1 || caps.delegation.execution !== true || caps.delegation.receiptQuery !== true || caps.delegation.settled !== true || typeof this.targets.get !== "function") fail("HOST_DELEGATION_UNAVAILABLE");
       }
       async inspectExecution(id) {
         return this.serial(async () => {
@@ -268,10 +268,10 @@ var require_core = __commonJS({
           if (caps?.delegation?.version !== 1 || caps.delegation.receiptQuery !== true || caps.delegation.settled !== true || typeof this.targets.get !== "function") fail("HOST_RECEIPT_QUERY_UNAVAILABLE");
           const receipt = await this.targets.get({ requestKey: t.dispatch.requestKey });
           if (receipt?.found === false) return clone(t);
-          if (receipt?.found !== true || receipt.requestKey !== t.dispatch.requestKey || receipt.target?.kind !== t.dispatch.target.kind || receipt.target?.id !== t.dispatch.target.id || typeof receipt.executionId !== "string" || !receipt.executionId.startsWith("plugin-target:") || t.receipt?.executionId && receipt.executionId !== t.receipt.executionId || t.executionReceipt?.executionId && receipt.executionId !== t.executionReceipt.executionId || t.targetTaskId && receipt.taskId !== t.targetTaskId || !["pending", "accepted", "cancelled"].includes(receipt.status) || typeof receipt.settled !== "boolean") fail("EXECUTION_RECEIPT_MISMATCH");
+          if (receipt?.found !== true || receipt.requestKey !== t.dispatch.requestKey || (receipt.target ? receipt.target.kind !== t.dispatch.target.kind || receipt.target.id !== t.dispatch.target.id : !(receipt.status === "cancelled" && receipt.settled && !t.targetTaskId)) || typeof receipt.executionId !== "string" || !receipt.executionId.startsWith("plugin-target:") || t.receipt?.executionId && receipt.executionId !== t.receipt.executionId || t.executionReceipt?.executionId && receipt.executionId !== t.executionReceipt.executionId || t.targetTaskId && receipt.taskId !== t.targetTaskId || !["pending", "accepted", "cancelled"].includes(receipt.status) || typeof receipt.settled !== "boolean") fail("EXECUTION_RECEIPT_MISMATCH");
           const executed = receipt.status === "accepted" || receipt.status === "pending" && receipt.settled && receipt.result;
           if (executed && (typeof receipt.taskId !== "string" || !receipt.taskId)) fail("EXECUTION_RECEIPT_MISMATCH");
-          if (receipt.settled && receipt.status !== "cancelled" && (!receipt.result || !["completed", "failed", "cancelled", "interrupted"].includes(receipt.result.outcome) || typeof receipt.result.instanceId !== "string" || !receipt.result.instanceId || !Number.isSafeInteger(receipt.result.generation) || receipt.result.generation < 0)) fail("EXECUTION_RECEIPT_MISMATCH");
+          if (receipt.result && (!receipt.settled || !["completed", "failed", "cancelled", "interrupted"].includes(receipt.result.outcome) || typeof receipt.result.instanceId !== "string" || !receipt.result.instanceId || !Number.isSafeInteger(receipt.result.generation) || receipt.result.generation < 0)) fail("EXECUTION_RECEIPT_MISMATCH");
           const next = clone(this.state), n = next.tasks[id];
           n.executionReceipt = receipt;
           if (executed && ["dispatching", "uncertain"].includes(n.state)) {
@@ -393,7 +393,7 @@ var require_core = __commonJS({
         }
         const next = clone(this.state);
         const n = next.tasks[id];
-        if (receipt?.accepted !== true || !receipt.taskId) {
+        if (receipt?.accepted !== true || !receipt.taskId || receipt.delivery !== "queue" || receipt.requestKey !== t.dispatch.requestKey || typeof receipt.executionId !== "string" || !receipt.executionId.startsWith("plugin-target:") || receipt.target?.kind !== t.dispatch.target.kind || receipt.target?.id !== t.dispatch.target.id) {
           n.state = "uncertain";
           n.error = "DELIVERY_UNCERTAIN";
         } else {
@@ -585,7 +585,7 @@ var require_core = __commonJS({
           const next = clone(this.state);
           const n = next.tasks[id];
           n.cancelReceipt = receipt;
-          if (receipt?.cancelled === true && receipt.settled === true && receipt.requestKey === t.dispatch.requestKey && typeof receipt.clientId === "string" && receipt.clientId.startsWith("plugin-target:")) {
+          if (receipt?.cancelled === true && receipt.settled === true && receipt.requestKey === t.dispatch.requestKey && typeof receipt.clientId === "string" && receipt.clientId.startsWith("plugin-target:") && (!t.receipt?.executionId || receipt.clientId === t.receipt.executionId) && (!t.executionReceipt?.executionId || receipt.clientId === t.executionReceipt.executionId)) {
             n.orphanedDelivery = false;
             n.state = "stopped";
           } else if (n.state !== "stopped") n.state = "cancel_check";

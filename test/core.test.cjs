@@ -3,7 +3,7 @@ const copy=x=>structuredClone(x);
 async function fixture(){
  let data={...initial(),connection:{appId:'app',partnerId:'bot-1'}},n=0;const sends=[],writes=[];let snapshot={title:'写周报',description:'仅整理本任务',assigned:true,soleAppAssignee:true,done:false,createdAt:200,textDeliveries:[],attachments:[],agentStatus:2};
  const store={load:async()=>copy(data),save:async s=>{data=copy(s)}};
- const targets={capabilities:async()=>({delegation:{version:1,execution:true}}),resolve:async({target})=>target,send:async p=>{sends.push(copy(p));return{accepted:true,taskId:'canonical-1',delivery:'queue'}},cancel:async()=>({accepted:true})};
+ const targets={get:async()=>({found:false}),capabilities:async()=>({delegation:{version:1,execution:true,receiptQuery:true,settled:true}}),resolve:async({target})=>target,send:async p=>{sends.push(copy(p));return{executionId:'plugin-target:execution',requestKey:p.requestKey,target:p.target,delivery:'queue',accepted:true,taskId:'canonical-1'}},cancel:async()=>({accepted:true})};
  const remote={get:async()=>copy(snapshot),matches:(s,o)=>o.kind==='file'?fileMatches(s,o):o.kind==='text'?s.textDeliveries.includes(o.value):o.kind==='progress'?s.agentProgress===o.value.message&&s.agentStatus===o.value.status:s.done&&s.agentStatus===4,write:async(id,o)=>{writes.push(copy(o));if(o.kind==='text')snapshot.textDeliveries.push(o.value);else if(o.kind==='progress'){snapshot.agentProgress=o.value.message;snapshot.agentStatus=o.value.status;}else{snapshot.done=true;snapshot.agentStatus=4;}}};
  remote.prepareFile=(a,g)=>grantFor(a,g);remote.upload=async(id,a)=>{const receipt={guid:'attachment-'+a.id,name:a.name,size:a.bytes,resource:{id,type:'task_delivery'}};snapshot.attachments.push(receipt);writes.push({kind:'file',value:a});return receipt};
  const make=()=>new Bridge({store,targets,remote,uuid:()=>`key-${++n}`});const b=make();await b.load();
@@ -35,7 +35,7 @@ test("已停止来源的迟到不存在事件不阻断恢复，其它错误保�
 test('三次重复事件只保存一次，重复派发返回同一回执',async()=>{const f=await fixture();await Promise.all([f.b.ingest(f.event),f.b.ingest(f.event),f.b.ingest(f.event)]);assert.equal(Object.keys(f.data.events).length,1);await f.b.refresh('app:event-1');await f.b.dispatch('task-1',target);await f.b.dispatch('task-1',target);assert.equal(f.sends.length,1);});
 test('无创建标识和基线前历史任务不自动接管',async()=>{const f=await fixture();await f.add({...f.event,isCreate:false});assert.equal(Object.keys(f.data.tasks).length,0);await f.add({...f.event,id:'old',baseline:300});assert.equal(Object.keys(f.data.tasks).length,0);});
 test('持久化失败不接单、不派发',async()=>{const f=await fixture();f.store.save=async()=>{throw Error('disk full')};await assert.rejects(f.b.ingest(f.event));assert.equal(f.sends.length,0);assert.equal(Object.keys(f.b.state.events).length,0);});
-test('Host接受后本地写回失败：重启沿用原requestKey及正文恢复',async()=>{const f=await fixture();await f.add();let accepted=false;const save=f.store.save;f.targets.send=async p=>{f.sends.push(copy(p));accepted=true;return{accepted:true,taskId:'canonical-1'}};f.store.save=async s=>{if(accepted)throw Error('crash');await save(s)};await assert.rejects(f.b.dispatch('task-1',target));f.store.save=save;const recovered=f.make();await recovered.load();await recovered.dispatch('task-1',target);assert.equal(f.sends.length,2);assert.deepEqual(f.sends[0],f.sends[1]);});
+test('Host接受后本地写回失败：重启沿用原requestKey及正文恢复',async()=>{const f=await fixture();await f.add();let accepted=false;const save=f.store.save;f.targets.send=async p=>{f.sends.push(copy(p));accepted=true;return{executionId:'plugin-target:execution',requestKey:p.requestKey,target:p.target,delivery:'queue',accepted:true,taskId:'canonical-1'}};f.store.save=async s=>{if(accepted)throw Error('crash');await save(s)};await assert.rejects(f.b.dispatch('task-1',target));f.store.save=save;const recovered=f.make();await recovered.load();await recovered.dispatch('task-1',target);assert.equal(f.sends.length,2);assert.deepEqual(f.sends[0],f.sends[1]);});
 test('未知投递绝不重发或换伙伴',async()=>{const f=await fixture();f.targets.send=async p=>{f.sends.push(p);throw Object.assign(Error(),{code:'DELIVERY_UNCERTAIN'})};await assigned(f);await f.b.dispatch('task-1',target);assert.equal(f.sends.length,1);await rejects(f.b.dispatch('task-1',{kind:'bot',id:'other'}),'REQUEST_KEY_CONFLICT');});
 test('伙伴失效不改投',async()=>{const f=await fixture();await f.add();f.targets.resolve=async()=>{throw Object.assign(Error(),{code:'TARGET_UNAVAILABLE'})};await rejects(f.b.dispatch('task-1',target),'TARGET_UNAVAILABLE');assert.equal(f.b.task('task-1').state,'pending');assert.equal(f.sends.length,0);});
 test('每伙伴一个在途，其它任务保留待分配',async()=>{const f=await fixture();await assigned(f);await f.add({...f.event,id:'event2',guid:'task2'});await rejects(f.b.dispatch('task2',target),'TARGET_BUSY');assert.equal(f.b.task('task2').state,'pending');});
@@ -86,7 +86,7 @@ test('未关联伙伴拒绝接收；接收后自动入队，无需人工分配',
 test('宿主未接通委派审核时不投递，范围完整写进不可变信封',async()=>{
  const f=await fixture();await f.add();f.targets.capabilities=async()=>({delegation:{version:1,execution:false}});
  await rejects(f.b.dispatch('task-1',target),'HOST_DELEGATION_UNAVAILABLE');assert.equal(f.sends.length,0);
- f.targets.capabilities=async()=>({delegation:{version:1,execution:true}});await f.b.dispatch('task-1',target);
+ f.targets.capabilities=async()=>({delegation:{version:1,execution:true,receiptQuery:true,settled:true}});await f.b.dispatch('task-1',target);
  assert(f.sends[0].delegation.task.includes(f.snap.description));assert(f.sends[0].delegation.task.includes('task-1'));
 });
 test('只有匹配原请求的Host结束回执才释放停止任务伙伴占位',async()=>{
@@ -94,7 +94,7 @@ test('只有匹配原请求的Host结束回执才释放停止任务伙伴占位'
  const key=f.b.task('task-1').dispatch.requestKey;
  f.targets.cancel=async()=>({cancelled:true,settled:true,requestKey:'other',clientId:'plugin-target:one'});
  await f.b.settleStopped();assert.equal(f.b.task('task-1').orphanedDelivery,true);
- f.targets.cancel=async()=>({cancelled:true,settled:true,requestKey:key,clientId:'plugin-target:one'});
+ f.targets.cancel=async()=>({cancelled:true,settled:true,requestKey:key,clientId:'plugin-target:execution'});
  await f.b.settleStopped();assert.equal(f.b.task('task-1').orphanedDelivery,false);
  await f.add({...f.event,id:'next',guid:'task2'});await f.b.drain();assert.equal(f.sends.length,2);
 });
@@ -122,8 +122,8 @@ test('撤回待核验通过原执行的settled查询结束占位，不重复canc
  queryable(f,{status:'cancelled',settled:true});const r=await f.b.inspectExecution('task-1');assert.equal(r.state,'stopped');assert.equal(r.orphanedDelivery,false);assert.equal(cancels,0);
 });
 test('缺公开能力、错误任务/伙伴/请求或无自然终态证据时拒绝认领',async()=>{
- const f=await fixture();await assigned(f);await rejects(f.b.inspectExecution('task-1'),'HOST_RECEIPT_QUERY_UNAVAILABLE');
- for(const bad of [{taskId:'wrong'},{target:{kind:'bot',id:'other'}},{requestKey:'wrong'},{settled:true}]){
+ const f=await fixture();await assigned(f);f.targets.capabilities=async()=>({delegation:{version:1,execution:true}});await rejects(f.b.inspectExecution('task-1'),'HOST_RECEIPT_QUERY_UNAVAILABLE');
+ for(const bad of [{taskId:'wrong'},{target:{kind:'bot',id:'other'}},{requestKey:'wrong'},{settled:true,result:{outcome:'completed'}}]){
   queryable(f,bad);await rejects(f.b.inspectExecution('task-1'),'EXECUTION_RECEIPT_MISMATCH');
  }
  assert.equal(f.b.task('task-1').executionReceipt,undefined);assert.equal(f.sends.length,1);
@@ -136,4 +136,20 @@ test('Host accept持久化失败但原输入已有终态时仍可恢复回报身
  const f=await fixture();f.targets.send=async()=>{throw Error('store accept failed')};await assigned(f);
  queryable(f,{status:'pending',settled:true,result:{outcome:'completed',instanceId:'native',generation:2}});
  const r=await f.b.inspectExecution('task-1');assert.equal(r.state,'delivered');assert.equal(r.targetTaskId,'canonical-1');assert.equal(r.executionReceipt.status,'pending');assert.equal(f.writes.length,0);
+});
+
+test('发送前缺回执查询或settled能力时不投递',async()=>{
+ for(const key of ['receiptQuery','settled']){const f=await fixture();await f.add();f.targets.capabilities=async()=>({delegation:{version:1,execution:true,receiptQuery:true,settled:true,[key]:false}});await rejects(f.b.dispatch('task-1',target),'HOST_DELEGATION_UNAVAILABLE');assert.equal(f.sends.length,0);}
+});
+test('普通消息受理或错误委派身份不认作委派成功',async()=>{
+ for(const bad of [{executionId:undefined},{requestKey:'wrong'},{target:{kind:'bot',id:'other'}},{delivery:'steer'}]){const f=await fixture();f.targets.send=async p=>({accepted:true,taskId:'canonical-1',executionId:'plugin-target:execution',requestKey:p.requestKey,target:p.target,delivery:'queue',...bad});await assigned(f);assert.equal(f.b.task('task-1').state,'uncertain');}
+});
+test('cancel同键但另一executionId不能释放占位',async()=>{
+ const f=await fixture();await assigned(f);await f.b.stop('task-1');f.targets.cancel=async()=>({cancelled:true,settled:true,requestKey:f.b.task('task-1').dispatch.requestKey,clientId:'plugin-target:other'});await f.b.settleStopped();assert.equal(f.b.task('task-1').orphanedDelivery,true);
+});
+test('已撤回accepted收据可settled但没有自然终态',async()=>{
+ const f=await fixture();await assigned(f);await f.b.cancel('task-1');queryable(f,{settled:true});const r=await f.b.inspectExecution('task-1');assert.equal(r.state,'stopped');assert.equal(r.executionReceipt.result,undefined);
+});
+test('cancel-before-send墓碑可无target/taskId且不重发',async()=>{
+ const f=await fixture();f.targets.send=async p=>{f.sends.push(p);throw Error('lost')};await assigned(f);queryable(f,{status:'cancelled',settled:true,target:undefined,taskId:undefined});assert.equal((await f.b.inspectExecution('task-1')).state,'stopped');assert.equal(f.sends.length,1);
 });

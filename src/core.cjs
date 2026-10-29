@@ -99,7 +99,7 @@ class Bridge {
   async assertExecution() {
     if(typeof this.targets.capabilities!=="function")fail("HOST_DELEGATION_UNAVAILABLE");
     const caps=await this.targets.capabilities();
-    if(caps?.delegation?.version!==1||caps.delegation.execution!==true)fail("HOST_DELEGATION_UNAVAILABLE");
+    if(caps?.delegation?.version!==1||caps.delegation.execution!==true||caps.delegation.receiptQuery!==true||caps.delegation.settled!==true||typeof this.targets.get!=="function")fail("HOST_DELEGATION_UNAVAILABLE");
   }
   async inspectExecution(id) { return this.serial(async()=>{
     const t=this.task(id);if(!t.dispatch)return clone(t);
@@ -108,7 +108,7 @@ class Bridge {
     const receipt=await this.targets.get({requestKey:t.dispatch.requestKey});
     if(receipt?.found===false)return clone(t); // Absence is never permission to resend.
     if(receipt?.found!==true||receipt.requestKey!==t.dispatch.requestKey||
-      receipt.target?.kind!==t.dispatch.target.kind||receipt.target?.id!==t.dispatch.target.id||
+      (receipt.target ? receipt.target.kind!==t.dispatch.target.kind||receipt.target.id!==t.dispatch.target.id : !(receipt.status==='cancelled'&&receipt.settled&&!t.targetTaskId))||
       typeof receipt.executionId!=='string'||!receipt.executionId.startsWith('plugin-target:')||
       (t.receipt?.executionId&&receipt.executionId!==t.receipt.executionId)||
       (t.executionReceipt?.executionId&&receipt.executionId!==t.executionReceipt.executionId)||
@@ -116,7 +116,7 @@ class Bridge {
       !['pending','accepted','cancelled'].includes(receipt.status)||typeof receipt.settled!=='boolean')fail('EXECUTION_RECEIPT_MISMATCH');
     const executed=receipt.status==='accepted'||(receipt.status==='pending'&&receipt.settled&&receipt.result);
     if(executed&&(typeof receipt.taskId!=='string'||!receipt.taskId))fail('EXECUTION_RECEIPT_MISMATCH');
-    if(receipt.settled&&receipt.status!=='cancelled'&&(!receipt.result||
+    if(receipt.result&&(!receipt.settled||
       !['completed','failed','cancelled','interrupted'].includes(receipt.result.outcome)||
       typeof receipt.result.instanceId!=='string'||!receipt.result.instanceId||
       !Number.isSafeInteger(receipt.result.generation)||receipt.result.generation<0))fail('EXECUTION_RECEIPT_MISMATCH');
@@ -191,7 +191,7 @@ class Bridge {
       await this.save(next); return clone(next.tasks[id]);
     }
     const next = clone(this.state); const n = next.tasks[id];
-    if (receipt?.accepted !== true || !receipt.taskId) { n.state = "uncertain"; n.error = "DELIVERY_UNCERTAIN"; }
+    if (receipt?.accepted !== true || !receipt.taskId || receipt.delivery!=="queue" || receipt.requestKey!==t.dispatch.requestKey || typeof receipt.executionId!=="string" || !receipt.executionId.startsWith("plugin-target:") || receipt.target?.kind!==t.dispatch.target.kind || receipt.target?.id!==t.dispatch.target.id) { n.state = "uncertain"; n.error = "DELIVERY_UNCERTAIN"; }
     else { n.state = "delivered"; n.targetTaskId = receipt.taskId; n.receipt = receipt; }
     await this.save(next); return clone(n);
   }
@@ -304,7 +304,7 @@ class Bridge {
     const receipt = await this.targets.cancel({ requestKey: t.dispatch.requestKey });
     const next = clone(this.state); const n=next.tasks[id]; n.cancelReceipt=receipt;
     if(receipt?.cancelled===true&&receipt.settled===true&&
-       receipt.requestKey===t.dispatch.requestKey&&typeof receipt.clientId==="string"&&receipt.clientId.startsWith("plugin-target:")){
+       receipt.requestKey===t.dispatch.requestKey&&typeof receipt.clientId==="string"&&receipt.clientId.startsWith("plugin-target:")&&(!t.receipt?.executionId||receipt.clientId===t.receipt.executionId)&&(!t.executionReceipt?.executionId||receipt.clientId===t.executionReceipt.executionId)){
       n.orphanedDelivery=false;n.state="stopped";
     }else if(n.state!=="stopped")n.state="cancel_check";
     await this.save(next); return {receipt};
