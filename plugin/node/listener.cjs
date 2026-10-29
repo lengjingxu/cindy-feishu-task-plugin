@@ -112767,9 +112767,9 @@ var require_core = __commonJS({
         for (let t of Object.values(this.state.tasks))
           t.dispatch && (t.orphanedDelivery || t.state === "cancel_check") && await this.cancel(t.id);
       }
-      async drain() {
+      async drain(shouldContinue = () => !0) {
         await this.settleStopped();
-        for (let t of Object.values(this.state.tasks)) if (["pending", "scheduled"].includes(t.state) && t.queuedTarget && (!t.schedule?.notBefore || t.schedule.notBefore <= this.now()) && (!t.nextAttemptAt || t.nextAttemptAt <= this.now()))
+        for (let t of Object.values(this.state.tasks)) if (shouldContinue() && ["pending", "scheduled"].includes(t.state) && t.queuedTarget && (!t.schedule?.notBefore || t.schedule.notBefore <= this.now()) && (!t.nextAttemptAt || t.nextAttemptAt <= this.now()))
           try {
             await this.dispatch(t.id, t.queuedTarget);
           } catch (e) {

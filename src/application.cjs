@@ -46,7 +46,31 @@ const journal=store;
 // The Node-held token reaches Host uploadDir over the private authenticated bridge.
 const uploads = new GrantedUpload(req => node('feishu/action', {action:'upload',appId:bridge.state.connection?.appId,request:req},req.callId), () => connectionAuthenticated);
 let hostServicesAvailable=false; let loading; let bridge; let onboarding; let appProfile; let channelBinding; let runner; let activity; let lease; let testMode=false; let testTimer; let receiving = false; let listenerState = "paused"; let listenerRun; let connectionAuthenticated = false; let draining=null;
-async function tick(){if(!receiving||testMode||!bridge)return;if(!draining)draining=bridge.drain().finally(()=>{draining=null;});return draining;}
+let queueTimer;
+function stopQueueTimer(){if(queueTimer!==undefined){clearTimeout(queueTimer);queueTimer=undefined;}}
+function armQueueTimer(){
+  stopQueueTimer();
+  if(!receiving||testMode||!bridge)return;
+  const now=Date.now();let due=Infinity;
+  for(const t of Object.values(bridge.state.tasks)){
+    // Never wake an attempted or unknown delivery for automatic re-send.
+    if(!['pending','scheduled'].includes(t.state)||!t.queuedTarget||t.dispatch)continue;
+    const eligibleAt=Math.max(t.schedule?.notBefore||0,t.nextAttemptAt||0);
+    due=Math.min(due,eligibleAt>now?eligibleAt:now+60000);
+  }
+  if(due===Infinity)return;
+  // Busy partners and failed reads must not turn overdue work into a hot loop.
+  const delay=due>now?Math.min(due-now,60000):60000;
+  queueTimer=setTimeout(()=>{queueTimer=undefined;tick().catch(e=>channel.postMessage({type:'error',error:error(e)}));},delay);
+}
+async function tick(){
+  if(!receiving||testMode||!bridge)return;
+  if(!draining){
+    stopQueueTimer();
+    draining=bridge.drain(()=>receiving&&!testMode).then(()=>channel.postMessage({type:'changed'})).finally(()=>{draining=null;armQueueTimer();});
+  }
+  return draining;
+}
 async function node(method, params, callId) {
   canOperate(method);
   const r = await rawNode({ method, params: {...params,credentialKey:slot}, ...(callId?{callId,cancelWithCall:true}:{}),timeoutMs: method === "listener/run" ? 75000 : 30000 });
@@ -69,7 +93,7 @@ async function ready() {
     } });
     const dispatch=b.dispatch.bind(b);b.dispatch=(id,target)=>dispatchGate?dispatchGate(target,()=>dispatch(id,target)):dispatch(id,target);
     try{await b.load();}catch(e){if(e.code!=='LEDGER_NOT_INITIALIZED')throw e;await journal.initialize();await b.load();} channelBinding=new ChannelBinding(b); onboarding = new Onboarding(b, node); activity=new Activity(b,node);
-    lease=new LeaseLoop(node,state=>{if(state==='ended'){receiving=false;if(!['failed','paused'].includes(listenerState))listenerState='gap_check';}else listenerState=state;channel.postMessage({type:'changed'});});
+    lease=new LeaseLoop(node,state=>{if(state==='ended'){receiving=false;stopQueueTimer();if(!['failed','paused'].includes(listenerState))listenerState='gap_check';}else listenerState=state;channel.postMessage({type:'changed'});});
     runner=new TestRunner(b,onboarding,{
       listen:async(appId,baseline,duration)=>{testMode=true;receiving=true;lease.start(appId,baseline,duration);await lease.waitReady();testTimer=setInterval(()=>runner.tick().catch(()=>{listenerState='attention';}),1000);},
       stop:async()=>{clearInterval(testTimer);await lease.stop();receiving=false;testMode=false;},
@@ -103,7 +127,7 @@ async function receive() {
     next.connection.baseline=inventory.at;next.connection.assignmentBaseline=inventory;next.connection.receivingRequested=true;await b.save(next); });
   receiving = true; lease.start(b.state.connection.appId,b.state.connection.baseline,Infinity);
   listenerRun=lease.promise;
-  try{await lease.waitReady();await b.drain();}catch(e){await lease.stop();receiving=false;listenerState="failed";throw e;}
+  try{await lease.waitReady();await tick();}catch(e){receiving=false;stopQueueTimer();await lease.stop();listenerState="failed";throw e;}
 
 }
 async function ui(action, args = {}) {
@@ -151,7 +175,7 @@ async function ui(action, args = {}) {
     for (const [key, event] of Object.entries(b.state.events)) if (event.pending && !event.testOnly) await b.refresh(key);
     for (const t of Object.values(b.state.tasks)) if (t.state === "dispatching" && t.id!==runner.run?.guid) await b.dispatch(t.id, t.dispatch.target);
     for (const t of Object.values(b.state.tasks)) if (t.id!==runner.run?.guid && ["writing", "write_failed", "write_uncertain", "write_blocked"].includes(t.state)) await b.reconcile(t.id);
-    await runner.tick(); if(receiving&&!testMode)await b.drain(); return publicState();
+    await runner.tick(); if(receiving&&!testMode)await tick(); return publicState();
   }
   if (action === "targets") return cindy.targets.list({ targetKind: "bot" });
 
@@ -169,12 +193,12 @@ async function ui(action, args = {}) {
   if (action === "test-connection") { if(receiving)fail("PAUSE_FIRST"); await runner.start(args.target); return publicState(); }
   if (action === "cancel-test") { await runner.cancel(); return publicState(); }
   if (action === "receive") { await receive(); return publicState(); }
-  if (action === "pause") {await b.serial(async()=>{const n=JSON.parse(JSON.stringify(b.state));n.connection.receivingRequested=false;await b.save(n);});if(testMode)await runner.cancel();else await lease.stop();receiving=false; listenerState = "paused"; return publicState(); }
+  if (action === "pause") {await b.serial(async()=>{const n=JSON.parse(JSON.stringify(b.state));n.connection.receivingRequested=false;await b.save(n);});receiving=false;stopQueueTimer();if(testMode)await runner.cancel();else await lease.stop();await draining; listenerState = "paused"; return publicState(); }
 
   if (action === "recover-task") {
     if(!receiving||testMode)fail("CHECK_CONNECTION_FIRST");
     if(!/^[a-f0-9-]{36}$/i.test(args.id||""))fail("TASK_GUID_INVALID");
-    await b.recoverAssigned(args.id);await b.drain();return publicState();
+    await b.recoverAssigned(args.id);await tick();return publicState();
   }
   if (action === "reconcile") return b.reconcile(args.id);
   if (action === "cancel") return b.cancel(args.id);
@@ -195,7 +219,7 @@ async function onMessage(msg) {
           if (t?.state === "pending") {
             await b.enqueue(t.id,b.partnerTarget(t.id));
           }
-          await b.drain();
+          await tick();
         }
       } catch (e) {
         // No successful ACK is issued on persistence failure. Do not change partner/key.
@@ -228,7 +252,7 @@ async function onMessage(msg) {
     else if (msg.tool === "append_task_activity") result=await activity.append(args,args.session_context?.session_id);
     else if (msg.tool === "upload_result_file") result = await b.deliverFile(args, args.session_context?.session_id, args.dir_deposit, msg.callId);
     else fail("TOOL_UNSUPPORTED");
-    if(testMode)await runner.tick();else if(receiving)await b.drain();
+    if(testMode)await runner.tick();else if(receiving)await tick();
     await cindy.send({ type: "tool-result", callId: msg.callId, ok: true, result });
     channel.postMessage({ type: "changed" });
   } catch (e) { const err = error(e); await cindy.send({ type: "tool-result", callId: msg.callId, ok: false, errorCode: err.code, message: err.message }); }
@@ -240,7 +264,7 @@ return {id,slot,ready,ui,onMessage,publicState,
  async prepareRemoval(){
   await ready();
   if(testMode)fail('TEST_ALREADY_ACTIVE');
-  if(receiving)await lease.stop();receiving=false;listenerState='paused';
+  const wasReceiving=receiving;receiving=false;stopQueueTimer();if(wasReceiving)await lease.stop();await draining;listenerState='paused';
   await bridge.serial(async()=>{const n=JSON.parse(JSON.stringify(bridge.state));if(n.connection)n.connection.receivingRequested=false;await bridge.save(n);});
   await bridge.tail;
   if(onboarding.hasBindings()||Object.values(bridge.state.tasks).some(t=>!['done','stopped'].includes(t.state))||
