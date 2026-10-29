@@ -1,6 +1,6 @@
 # 独立发布
 
-> 0.15.4 当前仅为开发源码：未核实最低正式 Host 版本，Forge 实测因缺少 minCindyVersion 拒绝打包。以下流程须待正式契约及真实闭环验收后执行，不填占位版本绕过。
+> 0.15.5 当前仅交付开发源码。缺少 minCindyVersion 的 MANIFEST_INVALID 是清单问题，不能作为运行时证据；真实协议缺口见 compatibility.md。尚无完整兼容版本可填写，以下发行流程暂不能执行，不填占位版本绕过。
 
 1. 从最新 main 建分支；修改源码与必要测试。版本需同步 package.json、package-lock.json、plugin/ghost.json，并填写 releaseNotes。
 2. 运行 npm ci、npm run build、npm test、npm run test:ui。用 Cindy Forge 校验并打包 plugin 目录，确认包与构建内容一致。

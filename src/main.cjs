@@ -95,13 +95,19 @@ channel.onmessage=async({data})=>{
 };
 cindy.onHostMessage(async msg=>{
  try{
-  await ready();
   if(msg.type==='event'&&msg.name==='node-notification'){
+   await ready();
    const key=msg.params?.credentialKey||'account';
    const a=apps.entries().find(a=>a.slot===key&&a.status==='active');
    if(a)await runtime(a.id).onMessage(msg);return;
   }
   if(msg.type!=='tool-call')return;
+  if(msg.tool==='inspect_host_support'){
+   const node=await cindy.node.request({method:'runtime/capabilities',params:{},timeoutMs:30000});
+   const support={node:node.ok?node.result:null,nodeError:node.ok?undefined:node.errorCode,targets:typeof cindy.targets?.list==='function',scopedDelegationProbe:typeof cindy.targets?.capabilities==='function',fullWorkflowVerified:false};
+   await cindy.send({type:'tool-result',callId:msg.callId,ok:true,result:support});return;
+  }
+  await ready();
   if(msg.tool==='list_inbox'){const s=await state();const offset=Math.max(0,msg.args?.offset||0);await cindy.send({type:'tool-result',callId:msg.callId,ok:true,result:s.tasks.slice(offset,offset+50)});return;}
   const id=msg.tool==='bind_application'?(msg.args?.applicationId||apps.entries().find(a=>a.status==='active')?.id):apps.route(msg.args||{});
   if(!id)fail('APPLICATION_REQUIRED');

@@ -1872,14 +1872,21 @@
       };
       cindy.onHostMessage(async (msg) => {
         try {
-          await ready();
           if (msg.type === "event" && msg.name === "node-notification") {
+            await ready();
             const key = msg.params?.credentialKey || "account";
             const a = apps.entries().find((a2) => a2.slot === key && a2.status === "active");
             if (a) await runtime(a.id).onMessage(msg);
             return;
           }
           if (msg.type !== "tool-call") return;
+          if (msg.tool === "inspect_host_support") {
+            const node = await cindy.node.request({ method: "runtime/capabilities", params: {}, timeoutMs: 3e4 });
+            const support = { node: node.ok ? node.result : null, nodeError: node.ok ? void 0 : node.errorCode, targets: typeof cindy.targets?.list === "function", scopedDelegationProbe: typeof cindy.targets?.capabilities === "function", fullWorkflowVerified: false };
+            await cindy.send({ type: "tool-result", callId: msg.callId, ok: true, result: support });
+            return;
+          }
+          await ready();
           if (msg.tool === "list_inbox") {
             const s = await state();
             const offset = Math.max(0, msg.args?.offset || 0);

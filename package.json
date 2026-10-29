@@ -1,11 +1,12 @@
 {
   "name": "feishu-task-bridge-author",
   "private": true,
-  "version": "0.15.4",
+  "version": "0.15.5",
   "scripts": {
     "build": "node scripts/build.cjs",
     "test": "node --test test/*.test.cjs",
-    "test:ui": "node scripts/test-ui.cjs"
+    "test:ui": "node scripts/test-ui.cjs",
+    "audit:host": "node scripts/audit-installed-host.cjs"
   },
   "dependencies": {
     "@larksuiteoapi/node-sdk": "1.76.0"

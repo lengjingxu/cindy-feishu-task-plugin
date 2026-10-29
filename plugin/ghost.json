@@ -2,13 +2,22 @@
   "schemaVersion": 3,
   "id": "feishu-task-bridge",
   "name": "飞书任务",
-  "description": "绑定飞书应用与 Cindy 伙伴，自动接收任务并回报进度和产物。",
-  "whenToUse": "绑定飞书应用、查看任务，或由原关联伙伴回报任务进度与产物。",
-  "version": "0.15.4",
+  "description": "飞书任务工程预览：检查宿主支持，保留应用与任务看板；完整扫码、伙伴执行和文件回报尚不支持正式版。",
+  "whenToUse": "检查飞书任务插件当前适配器的宿主入口支持，查看任务，或在已验证测试环境由原关联伙伴回报进度与产物。",
+  "version": "0.15.5",
   "kind": "chip",
   "entry": "main.js",
   "icon": "assets/icon.png",
   "tools": [
+    {
+      "name": "inspect_host_support",
+      "description": "只读检查 Node 授权入口与 targets 能力探测入口是否存在，不读取凭据、不发送任务；不验证伙伴执行、settled 回执、授权状态或完整闭环。",
+      "parameters": {
+        "type": "object",
+        "properties": {},
+        "additionalProperties": false
+      }
+    },
     {
       "name": "list_inbox",
       "description": "分页读取本插件收件箱，每页最多50条。",
@@ -259,7 +268,7 @@
     },
     {
       "name": "bind_application",
-      "description": "先通过官方 registerApp 添加新建或已有飞书应用，再在应用设置关联处理伙伴。未关联伙伴不接收任务；任务自动投递并回报。需要支持 Node 授权凭据保存的 Cindy 版本。",
+      "description": "测试适配器：通过 registerApp 添加飞书应用，再关联处理伙伴。当前适配器所用凭据写回扩展未在已核验正式版提供；不代表 SDK 授权天然需要该扩展。",
       "parameters": {
         "type": "object",
         "properties": {
@@ -406,5 +415,8 @@
       "accounts.feishu.cn"
     ]
   },
-  "releaseNotes": "插件自主唤醒预约队列，暂停后停止唤醒，未知投递不重发。撤下未经验证的最低正式版本声明；当前仅交付开发源码，正式兼容与安装包仍待验证。"
+  "releaseNotes": "新增无需凭据的宿主支持检查，Node仅在授权或上传请求捕获测试扩展。交付正式安装产物核验证据及最小协议方案；完整兼容版本尚未确定，本阶段仅交付源码，不提供完整兼容安装包。",
+  "setup": {
+    "requires": []
+  }
 }

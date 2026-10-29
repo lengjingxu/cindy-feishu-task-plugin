@@ -1,45 +1,49 @@
-# Host 兼容性
+# Host 兼容性与验证范围
 
-插件的飞书业务、页面、队列及回报逻辑均在本仓库。Cindy 只提供通用插件接口和审核接线。
+## 结论
 
-| 现有测试适配器使用的能力（不是正式版架构要求） | 用途 |
-| --- | --- |
-| Node secretBindings.saveMethods / settingsMethod | 设置页授权及凭据安全保存 |
-| 带鉴权的文件上传桥接 | 将实际产物上传至原飞书任务 |
-| agent.delegation、targets.capabilities / send | 向绑定伙伴委派受限任务 |
-| 输入、取消与 settled 回执及 Auto 审核接线 | 确认执行归属，保护在途占位 |
+0.15.5 仅交付开发源码，不是已完成的飞书任务产品，也不提供完整兼容安装包。新增的 inspect_host_support 不需要凭据，检查的是当前适配器入口，不代表安全存储不存在或完整流程可用。
 
-2026-10-29 核对官方 tag `v0.1.119`，commit `0694ed7e001e027a031ffed21a088bd1975132de`：其 [manifest](https://github.com/makecindy/cindy/blob/0694ed7e001e027a031ffed21a088bd1975132de/packages/plugin-protocol/src/manifest.ts) 尚无 delegation、saveMethods、settingsMethod 声明，不能作为本插件完整支持版本。
+0.15.4 删除 minCindyVersion 导致 MANIFEST_INVALID，这只证明 schemaVersion 3 缺必填字段，**不是运行时能力缺口的证据**。目前没有已核实支持完整业务依赖的正式版本，不能为了打包而填写 0.1.118 或 0.1.120。源码清单仍不满足发行条件；不能将“故意不能打包”当作解决目标。
 
-本地验收构建源码基于 `33c0b30a3173e2c9afcec6fe8357f82f3cc733c9`；这是测试构建记录，不是正式支持版本承诺。相关 [Core PR #7718](https://github.com/makecindy/cindy/pull/7718) 在本次检查时为 CLOSED、未合并。仓库不会自动修改或重开该 PR。
+正式随包 plugin-manifest.md 第 58–63 行要求该字段表示插件实际依赖的首个正式版本，供发布服务选择兼容 release，**不是单纯的 schema 加载版本**。plugin-compatibility.md 第 6–12 行另要求运行时能力检测。只读检查、隔离 VM 和 Forge 成功都不能证明同一完整插件已兼容。
 
-0.15.4 已撤下未经验证的 minCindyVersion: 0.1.118。schemaVersion 3 要求该字段，因此当前源码应被 Forge 拒绝打包；不使用占位版本或降级 schema 绕过。正式上架前必须验证实际发布的 Host，填写真实支持的最低版本，并在该版本完成安装、授权、执行、文件及状态回报。缺少能力时保留错误，不改用普通消息冒充委派成功。
+## 可复现证据
 
-## 0.1.120 绑定提示核验
+审计对象为 /Applications/Cindy.app/Contents/Resources，版本 0.1.120，sourceCommit 为 b3dd8436228135aa8be9827d204e4e5eaf9316b4，builtAt 为 2026-10-29T00:19:45.253+08:00。该来源提交未从公开仓库解析，不能用公开 beta tag 或测试分支替代。
 
-2026-10-29，运行客户端报告 currentVersion=0.1.120，当前渠道没有可安装更新。只读检查实际安装包的 package.json 和 `.vite/build/nodeRuntimeWorkerProcess.js`：版本确为 0.1.120，Node 工作进程没有 `bindHostServices`，因此插件的 binding/restore 返回 hostServices=false，应用设置不展示绑定按钮。
+运行 npm run build 后执行 npm run audit:host；也可执行 node scripts/audit-installed-host.cjs 并传入目标应用 Resources 目录。
 
-该安装构建的来源元数据为 `b3dd8436228135aa8be9827d204e4e5eaf9316b4`，公开仓库未能解析这个提交；以上结论来自实际安装包，不能把它等同于公开 beta tag。公开 `v0.1.120-beta` 的 commit 为 `b0c217c98b2346bb32a34821241992ba52918a86`，其 manifest 同样未包含 delegation、saveMethods、settingsMethod。
+脚本只读 app.asar 和随包作者文档；在隔离 VM 中执行实际 preload、Node bootstrap 及插件 worker 的无副作用能力检查。它不调用真实 IPC、不打开授权、不访问网络、不读取用户凭据/数据库、不派发或取消任务。静态字符串只用作索引，不能单凭“没搜到”推导功能不存在。
 
-0.15.3 将“请更新 Cindy 后绑定应用”改为“当前 Cindy 缺少此插件的绑定接口”，并把 HTTP 失败和响应格式错误分开报告。插件文案修正不能补齐宿主能力。后续须基于正式版实际公开契约选择插件架构；不能由当前适配器缺接口推导出必须改 Cindy Core。未验证前不预设最低正式版本，也不宣称可独立闭环。
+[本次审计结果及 SHA-256](host-contract-0.1.120.json) 包含可复查文件指纹。它属于安装产物静态核验及隔离协议执行，**不是正式 Host 安装验收或真实闭环**。
 
-## 插件自主调度（0.15.4）
+| 边界 | 正式公开证据 | 对本插件的结论 |
+| --- | --- | --- |
+| Node 权限 | 随包 §4.12.3：当前系统账号可读写文件、联网；bootstrap 仅暴露 spawnEntry、bindDeviceAuthorization、bindAuthorization | 飞书 SDK、HTTP、长连接、队列可由插件维护；不需要新增飞书专用 Core 业务 |
+| SDK 注册 | §4.12.5：device/browser 只开授权页，CLI 继续轮询、保存、校验；成功须晚于实际领取保存校验 | 不能把 bindHostServices 说成 SDK 天然依赖；当前适配器使用它只是现有实现选择 |
+| Host 凭据 | §4.12.1：设置页 /secrets/key PUT 写 safeStorage；secretBindings 按 method/entry 注入 Node | 支持用户填写凭据。不是 Node 新授权结果写回接口；不能将 SDK secret 经 stdout/BC 转给页面代存 |
+| 插件自管凭据 | §4.12.5 允许 CLI 自管；正式 bootstrap 无 owner 数据目录接口，cwd 为系统临时目录 | 可设计自己的安全存储，但必须解决命名、权限、撤权及身份隔离；不能声称自动获得 Cindy 账号隔离，不能写包目录或临时目录冒充持久化 |
+| 账本 | §4.10：fs root=data 支持读写列删；workdir/save 仅 write | Journal 可保持由插件维护、使用公开 fs；它不能读取过户文件，也不是密钥保险库 |
+| 文件过户 | §4.7：dir_deposit 只有 token/file_count/total_bytes/rel_paths；uploadDir 接受票据与当前 callId | 路径/文件字节不交插件。Node 没有票据解引用接口；不能扫描 Agent 目录替代 |
+| 上传鉴权 | §4.7：cindy.fetch 过滤页面 Authorization；凭据来自 network.secrets/connections/OAuth | uploadDir 已存在。缺的是 Node 动态飞书 token 与 Host 票据上传的安全组合，而非“没有上传能力” |
+| 静态 exchange | §2、§4.7：静态 bodyFormat 只有一个占位符，实际代码对 JSON 值转义 | 固定 appId + 用户填写 appSecret 可定义静态交换；不能从动态 envelope 拆出 appId/appSecret，也不能为扫码后的任意多应用修改已批准 manifest。不是本需求的等价架构 |
+| 伙伴投递 | 实际 preload 与 PluginTargetSlot 均只有 list/resolve/send/cancel；§4.11.3 描述普通内容投递 | accepted 不是独立伙伴任务范围授权；额外 delegation 可能被忽略，禁止据此宣称独立执行 |
+| 取消及结束 | §4.11.3、实际取消分支仅 cancelled/runningWorkMayHaveStarted，无 settled | 不能据取消或纯文字回报解除原伙伴在途占位；已有 needs_input/排队任务保持原状 |
+| 普通任务 | tasks.create/send/getRun/listRuns/readMessages 仅适用插件自建普通任务 | 不可把伙伴 taskId 交 tasks API 读结果；不以普通任务替代指定伙伴 |
 
-预约与安全重试由插件自己的计时器驱动，不再依赖连接心跳或用户打开页面。到期仍重新读取飞书任务，保留固定伙伴、冻结未知投递及原有重试规则。忙碌伙伴每分钟检查；较远预约最多每分钟校时。暂停、监听结束、断开前清除计时器。暂停阻止后续队列项和新唤醒，并等待正在处理的单项结束；已经发出的请求不能撤回。循环仍由飞书生成下一期，无开始日期使用截止日期。
+## 保留的业务与最小缺口
 
-计时器运行在插件已有常驻逻辑页中，不表示退出 Cindy 后还会执行，也没有新增系统服务、后台守护或权限。测试使用虚构数据和可控时钟；不代表正式客户端或真实飞书任务已经验收。
+飞书 SDK 注册、订阅、任务资料、预约（无开始日期的循环用截止日期）、队列、多应用映射、进度和结果协议仍属于插件。自主计时器不依赖页面操作；暂停阻止后续项与新唤醒，等待已开始单项结束，不能撤回已发请求。退出 Cindy 后不会继续执行。
 
-## 待核验的最小边界
+在保留动态扫码多应用、Host 文件过户与真实关联伙伴执行的条件下，正式版本缺少两项关键组合：**动态鉴权票据上传**与**范围受限的伙伴执行及可信 settled 回执**。另有插件自管安全凭据尚未实现/验证，不能混同为必然要改 Core 的缺口。见 [最小公开协议方案](minimal-host-contract.md)。
 
-- 凭据：SDK 注册业务归插件；安全保存与恢复选择哪条正式公开路径仍待核验，不无条件要求 saveMethods/settingsMethod。
-- 执行：真实伙伴任务的授权、身份与 settled 回执必须有公开协议，普通消息不能替代。
-- 文件：真实文件过户和鉴权上传必须核对正式协议，不能把测试 authenticatedFetch 当作唯一方案。
-- 持久化：插件维护账本和队列；正式 Host 的 Node 权限、持久化位置与隔离契约须验证后决定。
+测试构建 33c0b30a3173e2c9afcec6fe8357f82f3cc733c9 仅作旧适配器参考。公开 v0.1.119 / v0.1.120-beta 不是上述安装构建。本阶段没有改 Core、现有安装或真实任务。
 
-本阶段未选择或实装新的凭据架构，未读取宿主私有数据，未改动真实在途任务。完整独立使用目标仍未达成。
+## 本阶段检查
 
-## 本阶段验证记录
+本地 Node v26.7.0：构建通过，163 项单测、90 项模拟 Host UI 检查通过。新增检查覆盖无需凭据的能力查询、未声明伙伴执行能力的如实报告、普通请求不捕获授权/上传扩展。正式 ASAR 的真实 Node bootstrap 在隔离 VM 中执行本插件 bundle，返回 authorization=true、hostServicesEntry=false、childSpawn=true。
 
-2026-10-29：本地 Node v26.7.0，构建完成，160 项单测、90 项模拟 Host UI 检查通过。新增 6 项自主调度测试，覆盖无心跳到期派发、忙碌伙伴、日期延期、暂停恢复、未知投递与读取失败退避。未执行真实授权或飞书闭环。
+没有执行真实安装、扫码、上传或伙伴闭环。本阶段未生成 .cindy，故无安装包校验值。新增工具和 setup.requires=[] 让无凭据的支持检查可被发现，业务动作仍保留自身认证/授权检查；未增加文件、网络、Node 或伙伴权限。
 
-Forge 对当前源码实际返回 MANIFEST_INVALID：schemaVersion 3 必须声明 minCindyVersion。没有生成新的 .cindy 包，无法给出安装包校验值；未改用其它打包方式。权限声明没有新增，测试构建的绑定及委派声明仍存在，尚未重构成正式版架构。
+清单仍保留测试适配器的 agent.delegation、secretBindings.saveMethods/settingsMethod 声明，以便旧测试代码的权限需求可审查；这些不是正式版已实现能力，也不授予权限。inspect_host_support 只探测入口，不调用或验证 scoped execution/settled。

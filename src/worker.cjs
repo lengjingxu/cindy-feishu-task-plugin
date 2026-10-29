@@ -15,11 +15,14 @@ function credential(request,key) {
   return v;
 }
 async function handle(request) {
-  const host=globalThis.__CINDY_NODE__?.bindHostServices?.();
+  const runtime=globalThis.__CINDY_NODE__;
+  if(request.method==='runtime/capabilities')return {version:1,authorization:typeof runtime?.bindAuthorization==='function',hostServicesEntry:typeof runtime?.bindHostServices==='function',childSpawn:typeof runtime?.spawnEntry==='function'};
   const authIndex=['binding/authorize','binding/authorize2','binding/authorize3','binding/authorize4'].indexOf(request.method);
   const key=authIndex>=0?slots[authIndex]:(request.params?.credentialKey||'account');
   if(!slots.includes(key))throw Object.assign(Error('APPLICATION_NOT_FOUND'),{code:'APPLICATION_NOT_FOUND'});
   if(authIndex>=0&&request.params?.credentialKey&&request.params.credentialKey!==key)throw Object.assign(Error('APP_ID_MISMATCH'),{code:'APP_ID_MISMATCH'});
+  const needsHost=authIndex>=0||(request.method==='feishu/action'&&request.params?.action==='upload');
+  const host=needsHost?runtime?.bindHostServices?.():undefined;
   const current=credential(request,key);
   const listener=getListener(key);
   if(request.method==='binding/restore')return {hostServices:typeof globalThis.__CINDY_NODE__?.bindHostServices==='function',...(current?{saved:true,appId:current.identity,revision:current.revision}:{saved:false})};
