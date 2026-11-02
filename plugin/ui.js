@@ -22,7 +22,7 @@ channel.onmessage=({data})=>{
 
  const p=pending.get(data.reqId);if(p){clearInterval(p.timer);clearTimeout(p.timeout);pending.delete(data.reqId);data.ok?p.resolve(data.result):p.reject(Object.assign(new Error(data.error.message),{code:data.error.code}));}
  if(data.type==='error')notice.textContent=data.error.message;
- if(data.type==='changed'&&!busy)refresh().catch(e=>notice.textContent=e.message);
+ if(data.type==='changed'&&!busy)refresh().then(maybeAutoReceive).catch(e=>notice.textContent=e.message);
 };
 window.addEventListener('pagehide',()=>{bindingFlow?.control.abort();for(const p of pending.values()){clearInterval(p.timer);clearTimeout(p.timeout);}pending.clear();channel.close();});
 function options(id=''){return '<option value="">选择伙伴</option>'+targets.map(t=>'<option value="'+esc(t.id)+'" '+(t.id===id?'selected':'')+'>'+esc(t.label)+'</option>').join('');}
@@ -90,15 +90,54 @@ function render(){
 }
 async function bindFromSettings(){
  const args=appArgs(),context=await request('begin-binding',args);
- const flow={url:null,token:context.token,applicationId:args.applicationId};bindingFlow=flow;render();
- try{
-  await request('authorize-binding',{...args,token:context.token});
-  if(bindingFlow===flow){await request('binding-complete',args);await refresh();}
+const flow={url:null,token:context.token,applicationId:args.applicationId};bindingFlow=flow;render();
+ let completed=false;
+try{
+ await request('authorize-binding',{...args,token:context.token});
+  if(bindingFlow===flow){completed=true;await request('binding-complete',args);await refresh();}
  }finally{if(bindingFlow===flow)bindingFlow=null;await request('end-binding',{...args,token:context.token}).catch(()=>{});render();}
+ if(completed)await autoAdvance();
 }
 const detailLoads=new Map();
 async function loadTask(t){if(!t||detailLoads.has(taskKey(t)))return;const key=taskKey(t);detailLoads.set(key,true);try{const r=await request('inspect-task',{id:t.id,...(t.applicationId?{applicationId:t.applicationId}:{})});state=r;render();}catch(e){if(detail&&selected===key)notice.textContent=e.message;}finally{detailLoads.delete(key);}}
 async function refresh(){state=await request('state');render();}
+const provisioned=k=>{const s=currentApplication().onboarding?.[k];return s?.state==='verified'||s?.runtime?.state==='verified';};
+let autoReceive=null; // {app} token set only when the auto chain starts a test
+async function autoAdvance(){
+ const view=currentApplication();
+ if(!view.binding?.partnerId)return;
+ busy=true;render();
+ try{
+  if(!provisioned('permissions')){
+   notice.textContent='正在检查应用权限…';
+   const s=await request('inspect-configuration',appArgs());if(s)state=s;render();
+   if(!provisioned('permissions'))return;
+  }
+  for(const [kind,label] of [['registration','正在注册任务身份…'],['subscription','正在订阅任务事件…']]){
+   const s=currentApplication().onboarding?.[kind];
+   if(s&&s.state!=='unverified')continue;
+   notice.textContent=label;
+   const next=await request('provision',{kind,...appArgs()});if(next)state=next;render();
+  }
+  const v=currentApplication();
+  if(v.onboarding?.test?.state!=='passed'&&(!v.testRun||['passed','failed','blocked'].includes(v.testRun.state))){
+   notice.textContent='正在验证应用连接…';
+   const next=await request('test-connection',{target:{kind:'bot',id:v.binding.partnerId},...appArgs()});if(next)state=next;
+   autoReceive={app:application};
+  }
+  notice.textContent='';
+ }catch(e){notice.textContent=e.message;}
+ finally{await refresh().catch(()=>{});busy=false;render();}
+}
+async function maybeAutoReceive(){
+ if(!autoReceive||autoReceive.app!==application)return;
+ const v=currentApplication();
+ if(v.onboarding?.test?.state==='passed'&&!v.receiving){
+  autoReceive=null;
+  try{await request('receive',appArgs());notice.textContent='';}catch(e){notice.textContent=e.message;}
+  await refresh().catch(()=>{});
+ }else if(!v.testRun||!['running','cleanup_pending','cleanup_uncertain'].includes(v.testRun.state))autoReceive=null;
+}
 document.addEventListener('keydown',e=>{if(e.key==='Escape'&&detail){detail=false;render();[...document.querySelectorAll('[data-task]')].find(b=>b.dataset.task===selected)?.focus();}});
 window.addEventListener('focus',()=>{if(!busy)refresh().catch(e=>notice.textContent=e.message);});
 document.addEventListener('click',async e=>{
@@ -136,13 +175,15 @@ document.addEventListener('click',async e=>{
    if(!/^account[234]?$/.test(r.credentialKey))throw new Error('应用连接无效');
    await request('finish-removal',appArgs());removing=null;application=null;await refresh();return;
   }
-  if(action==='bind'){await bindFromSettings();notice.textContent='';return;}
+  if(action==='bind'){await bindFromSettings();return;}
   if(action==='artifact-link'||action==='source-attachment-link'){
    const result=await request(action,args);const url=new URL(result.url);
    if(url.protocol!=='https:'||url.username||url.password||(url.port&&url.port!=='443'))throw new Error('文件链接无效，请重试。');
    const link=document.createElement('a');link.href=url.href;link.rel='noreferrer';link.referrerPolicy='no-referrer';document.body.append(link);link.click();link.remove();notice.textContent='';return;
   }
-  await request(['register-agent','subscribe-agent'].includes(action)?'provision':action==='refresh-task'?'inspect-task':action==='refresh'?'recover':action,args);if(action==='initialize'||action==='refresh'){const r=await request('targets');targets=r.targets;}notice.textContent='';if(action==='select-partner')editingPartner=false;await refresh();}
+  await request(['register-agent','subscribe-agent'].includes(action)?'provision':action==='refresh-task'?'inspect-task':action==='refresh'?'recover':action,args);if(action==='initialize'||action==='refresh'){const r=await request('targets');targets=r.targets;}
+  if(action==='select-partner'){editingPartner=false;await refresh();await autoAdvance();return;}
+  notice.textContent='';await refresh();}
  catch(err){notice.textContent=err.name==='AbortError'?'':err.message;if(['confirm-removal','finish-removal'].includes(action)){removing=null;await refresh().catch(()=>{});}}finally{busy=false;render();}
 });
 (async()=>{try{state=await request('state');const r=await request('targets');targets=r.targets;render();}catch(e){state.needsInitialization=e.code==='LEDGER_NOT_INITIALIZED';notice.textContent=state.needsInitialization?'':e.message;page='connection';render();}})();
