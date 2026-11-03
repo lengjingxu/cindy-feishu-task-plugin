@@ -1074,6 +1074,10 @@
       var { fail } = require_core();
       var { fileMatches } = require_artifacts();
       var clone = (x) => JSON.parse(JSON.stringify(x));
+      var CREATE_BUDGET = 6e5;
+      var QUEUE_BUDGET = 18e5;
+      var WORK_BUDGET = 6e5;
+      var SETTLE_BUDGET = 9e5;
       var TestRunner = class {
         constructor(b, onboarding, io, now = () => Date.now()) {
           Object.assign(this, { b, onboarding, io, now });
@@ -1113,7 +1117,7 @@
             await this.b.settleStopped();
             if (this.onboarding.hasBindings()) fail("ACTIVE_BINDINGS_FROZEN");
             const id = this.b.uuid(), marker = "cindy-test-" + id;
-            let run = { id, marker, epoch: s.epoch, appId: s.identity.appId, target: clone(target), startedAt: this.now(), deadline: this.now() + 6e5, state: "running", stage: "create", create: { state: "prepared" }, cleanup: { state: "not_needed" } };
+            let run = { id, marker, epoch: s.epoch, appId: s.identity.appId, target: clone(target), startedAt: this.now(), deadline: this.now() + CREATE_BUDGET, acceptedAt: null, queueDeadline: null, workStartedAt: null, workDeadline: null, state: "running", stage: "create", create: { state: "prepared" }, cleanup: { state: "not_needed" } };
             await this.save(run);
             try {
               await this.io.listen(run.appId, run.startedAt, 6e5);
@@ -1137,7 +1141,8 @@
             if (!r || !["running", "cleanup_pending", "cleanup_uncertain"].includes(r.state)) return r;
             if (r.state.startsWith("cleanup")) return this.cleanup(r);
             if (r.epoch !== this.onboarding.state.epoch) return this.finish(false, "TEST_CONFIGURATION_CHANGED");
-            if (this.now() >= r.deadline) return this.finish(false, "TEST_DEADLINE_EXCEEDED");
+            const expired = this.expired(r);
+            if (expired) return this.finish(false, expired);
             try {
               if (r.stage === "event") {
                 const entry = Object.entries(this.b.state.events).find(([, e]) => e.appId === r.appId && e.guid === r.guid);
@@ -1157,11 +1162,17 @@
                 const t2 = await this.b.dispatch(r.guid, r.target);
                 if (t2.state === "uncertain") return this.finish(false, "TEST_DELIVERY_UNCERTAIN");
                 if (!t2.targetTaskId) fail("TEST_DELIVERY_RECEIPT_INVALID");
-                r = { ...r, stage: "result", delivery: { taskId: t2.targetTaskId, requestKey: t2.dispatch.requestKey } };
+                const acceptedAt = this.now();
+                r = { ...r, stage: "result", acceptedAt, queueDeadline: acceptedAt + QUEUE_BUDGET, delivery: { taskId: t2.targetTaskId, requestKey: t2.dispatch.requestKey } };
                 await this.save(r);
               }
               let t = this.b.task(r.guid);
               if (["write_uncertain", "write_failed", "writing"].includes(t.state)) t = await this.b.reconcile(r.guid);
+              if (r.workStartedAt == null && this.started(t)) {
+                const workStartedAt = this.now();
+                r = { ...r, workStartedAt, workDeadline: workStartedAt + WORK_BUDGET };
+                await this.save(r);
+              }
               if (["write_blocked", "write_failed", "stopped", "needs_input"].includes(t.state) && t.error !== "FILE_GRANT_REQUIRED") return this.finish(false, t.error || "TEST_RESULT_BLOCKED");
               if (t.state === "done") {
                 const snap = await this.b.remote.get(r.guid);
@@ -1200,6 +1211,13 @@
             await this.save({ ...r, state: "create_uncertain", error: "TEST_GUID_UNKNOWN" });
             return this.run;
           }
+          const inflight = await this.inFlight(r);
+          if (inflight) {
+            const since = r.cleanup.since || this.now();
+            const wait = { ...r.cleanup, state: "waiting", reason: inflight, since };
+            await this.save(this.now() - since >= SETTLE_BUDGET ? { ...r, cleanup: wait, state: "cleanup_uncertain", error: "TEST_AGENT_IN_FLIGHT" } : { ...r, cleanup: wait });
+            return this.run;
+          }
           await this.b.serial(async () => {
             const t = this.b.state.tasks[r.guid];
             if (t && t.state !== "stopped") {
@@ -1217,6 +1235,7 @@
             }
             if (absent.absent !== true) fail("TEST_CLEANUP_READBACK_FAILED");
             r = { ...r, cleanup: { state: "verified", receipt: absent }, state: r.outcome || "failed", stage: "finished" };
+            if (r.error === "TEST_AGENT_IN_FLIGHT") delete r.error;
             await this.save(r);
             if (r.state === "passed") await this.b.serial(async () => {
               const n = clone(this.b.state);
@@ -1228,6 +1247,31 @@
             await this.save({ ...r, state: "cleanup_uncertain", error: e.code || "TEST_CLEANUP_UNKNOWN" });
           }
           return this.run;
+        }
+        expired(r) {
+          const now = this.now();
+          if (!r.delivery) return now >= r.deadline ? "TEST_DEADLINE_EXCEEDED" : null;
+          if (r.workStartedAt == null) return now >= r.queueDeadline ? "TEST_QUEUE_TIMEOUT" : null;
+          return now >= r.workDeadline ? "TEST_DEADLINE_EXCEEDED" : null;
+        }
+        started(t) {
+          return Boolean(t) && (t.startedAt != null || ["writing", "write_uncertain", "write_failed"].includes(t.state));
+        }
+        async inFlight(r) {
+          if (!r.delivery) return null;
+          const t = this.b.task(r.guid);
+          if (t && ["writing", "write_uncertain", "write_failed"].includes(t.state)) return "TASK_WRITING";
+          if (t && t.state === "done") return null;
+          if (typeof this.b.inspectExecution !== "function") return null;
+          let x;
+          try {
+            x = await this.b.inspectExecution(r.guid);
+          } catch (e) {
+            return "EXECUTION_RECEIPT_UNREADABLE";
+          }
+          const receipt = x?.executionReceipt;
+          if (!receipt || receipt.settled === true) return null;
+          return ["pending", "accepted", "cancelled"].includes(receipt.status) ? "EXECUTION_IN_FLIGHT" : null;
         }
         async cancel() {
           return this.serial(async () => {
@@ -1400,6 +1444,8 @@
         TASK_PERMISSIONS_REQUIRED: "\u8BF7\u5148\u67E5\u8BE2\u5F53\u524D\u5E94\u7528\u6743\u9650\u5E76\u5F00\u901A\u7F3A\u5C11\u7684\u9879\u76EE\u3002",
         TEST_TARGET_REQUIRED: "\u8BF7\u660E\u786E\u9009\u62E9\u672C\u6B21\u4E13\u7528\u6D4B\u8BD5\u7684\u4F19\u4F34\u3002",
         TEST_CLEANUP_REQUIRED: "\u4E0A\u4E00\u6B21\u4E13\u7528\u4EFB\u52A1\u6E05\u7406\u5C1A\u672A\u6838\u5B9E\uFF0C\u8BF7\u5148\u8BFB\u53D6\u539F\u4EFB\u52A1\u786E\u8BA4\u3002",
+        TEST_QUEUE_TIMEOUT: "\u4F19\u4F34\u6392\u961F\u8D85\u8FC7 30 \u5206\u949F\u4ECD\u672A\u5F00\u5DE5\uFF0C\u672C\u6B21\u4E13\u7528\u6D4B\u8BD5\u672A\u5F00\u59CB\u6267\u884C\u3002",
+        TEST_AGENT_IN_FLIGHT: "\u4F19\u4F34\u4ECD\u5728\u6267\u884C\u672C\u6B21\u4E13\u7528\u4EFB\u52A1\uFF0C\u672A\u5220\u9664\u98DE\u4E66\u4EFB\u52A1\u3002\u5F85\u5176\u7ED3\u675F\u540E\u81EA\u52A8\u6E05\u7406\u3002",
         QUEUED_TARGET_FROZEN: "\u6B64\u4EFB\u52A1\u5DF2\u6392\u961F\u7B49\u5F85\u539F\u4F19\u4F34\uFF0C\u4E0D\u4F1A\u81EA\u52A8\u6539\u6D3E\u3002",
         ONBOARDING_TEST_REQUIRED: "\u9996\u6B21\u63A5\u5165\u95ED\u73AF\u6D4B\u8BD5\u5C1A\u672A\u901A\u8FC7\uFF0C\u8BF7\u5148\u5B8C\u6210\u8FDE\u63A5\u9875\u6B65\u9AA4\u3002",
         ACTIVE_BINDINGS_FROZEN: "\u4ECD\u6709\u5728\u9014\u4EFB\u52A1\uFF0C\u5E94\u7528\u548C\u51ED\u636E\u7ED1\u5B9A\u5DF2\u51BB\u7ED3\u3002\u8BF7\u5148\u5904\u7406\u539F\u4EFB\u52A1\u3002",

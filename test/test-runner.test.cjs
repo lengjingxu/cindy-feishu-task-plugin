@@ -26,3 +26,29 @@ test('进度回写与事件核验并发时不误判失败或清理任务',async(
  assert.equal(f.runner.run.state,'running');assert.equal(f.runner.run.stage,'result');assert.equal(f.b.task(guid).state,'running');assert(!f.calls.includes('delete'));
 });
 test('附件下载不一致不得通过，清理前记录失败原因',async()=>{const f=await fixture();await f.runner.start(target);await f.event();const t=f.b.task(guid);await f.b.report('result',{bindingId:t.bindingId,generation:1,sequence:1,message:f.runner.run.marker,artifacts:[{id:'file',name:'proof.txt',bytes:48}]},'canonical-test');await f.b.deliverFile({bindingId:t.bindingId,generation:1,artifactId:'file'},'canonical-test',{},'call');f.io.download=async()=>{throw Object.assign(Error(),{code:'TEST_DOWNLOAD_CONTENT_MISMATCH'});};await f.runner.tick();assert.equal(f.runner.run.state,'failed');assert.equal(f.runner.run.error,'TEST_DOWNLOAD_CONTENT_MISMATCH');assert.equal(f.runner.run.proof.readback.done,true);assert.deepEqual(f.runner.run.proof.downloads,[]);assert.equal(f.runner.run.cleanup.state,'verified');});
+
+test('队列延迟超过派发期限仍能通过：到期后 3 分钟才开工',async()=>{
+ const f=await fixture();await f.runner.start(target);await f.event();const t=f.b.task(guid);
+ assert.equal(f.runner.run.stage,'result');assert.equal(typeof f.runner.run.queueDeadline,'number');
+ f.setNow(f.runner.run.deadline+180000);await f.runner.tick();
+ assert.equal(f.runner.run.state,'running');assert.equal(f.runner.run.error,undefined);
+ await f.b.report('progress',{bindingId:t.bindingId,generation:1,sequence:1,message:'已开始读取资料'},'canonical-test');
+ f.setNow(f.runner.run.deadline+240000);await f.runner.tick();
+ assert.equal(f.runner.run.state,'running');assert.equal(typeof f.runner.run.workStartedAt,'number');
+ await f.b.report('result',{bindingId:t.bindingId,generation:1,sequence:2,message:f.runner.run.marker,artifacts:[{id:'file',name:'proof.txt',bytes:48}]},'canonical-test');
+ await f.b.deliverFile({bindingId:t.bindingId,generation:1,artifactId:'file'},'canonical-test',{},'call');
+ await f.runner.tick();
+ assert.equal(f.runner.run.state,'passed');assert.equal(f.runner.run.cleanup.state,'verified');
+});
+
+test('伙伴未到终态不清理：等待执行结算后才删除任务',async()=>{
+ const f=await fixture();await f.runner.start(target);await f.event();const t=f.b.task(guid);
+ const receipt={found:true,requestKey:t.dispatch.requestKey,executionId:t.receipt.executionId,target:{kind:'bot',id:target.id},status:'accepted',settled:false,taskId:t.targetTaskId};
+ f.b.targets.get=async()=>structuredClone(receipt);
+ await f.runner.cancel();
+ assert.equal(f.runner.run.cleanup.state,'waiting');assert.equal(f.runner.run.cleanup.reason,'EXECUTION_IN_FLIGHT');
+ assert.equal(f.calls.filter(x=>x==='delete').length,0);
+ receipt.settled=true;receipt.status='cancelled';
+ await f.runner.tick();
+ assert.equal(f.runner.run.cleanup.state,'verified');assert.equal(f.calls.filter(x=>x==='delete').length,1);
+});

@@ -29,6 +29,8 @@ const errors = {
   TASK_PERMISSIONS_REQUIRED: "请先查询当前应用权限并开通缺少的项目。",
   TEST_TARGET_REQUIRED: "请明确选择本次专用测试的伙伴。",
   TEST_CLEANUP_REQUIRED: "上一次专用任务清理尚未核实，请先读取原任务确认。",
+  TEST_QUEUE_TIMEOUT: "伙伴排队超过 30 分钟仍未开工，本次专用测试未开始执行。",
+  TEST_AGENT_IN_FLIGHT: "伙伴仍在执行本次专用任务，未删除飞书任务。待其结束后自动清理。",
   QUEUED_TARGET_FROZEN: "此任务已排队等待原伙伴，不会自动改派。",
   ONBOARDING_TEST_REQUIRED: "首次接入闭环测试尚未通过，请先完成连接页步骤。",
   ACTIVE_BINDINGS_FROZEN: "仍有在途任务，应用和凭据绑定已冻结。请先处理原任务。",

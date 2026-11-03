@@ -1,5 +1,7 @@
 'use strict';
 const {fail}=require('./core.cjs');const {fileMatches}=require('./artifacts.cjs');const clone=x=>JSON.parse(JSON.stringify(x));
+// 创建/事件、受理排队、伙伴实际开工三段各自计时，避免队列延迟吃掉执行预算。
+const CREATE_BUDGET=600000,QUEUE_BUDGET=1800000,WORK_BUDGET=600000,SETTLE_BUDGET=900000;
 class TestRunner {
  constructor(b,onboarding,io,now=()=>Date.now()){Object.assign(this,{b,onboarding,io,now});this.tail=Promise.resolve();}
  serial(fn){const p=this.tail.then(fn);this.tail=p.catch(()=>{});return p;}
@@ -20,7 +22,7 @@ class TestRunner {
   await this.b.settleStopped();
   if(this.onboarding.hasBindings())fail('ACTIVE_BINDINGS_FROZEN');
   const id=this.b.uuid(),marker='cindy-test-'+id;
-  let run={id,marker,epoch:s.epoch,appId:s.identity.appId,target:clone(target),startedAt:this.now(),deadline:this.now()+600000,state:'running',stage:'create',create:{state:'prepared'},cleanup:{state:'not_needed'}};
+  let run={id,marker,epoch:s.epoch,appId:s.identity.appId,target:clone(target),startedAt:this.now(),deadline:this.now()+CREATE_BUDGET,acceptedAt:null,queueDeadline:null,workStartedAt:null,workDeadline:null,state:'running',stage:'create',create:{state:'prepared'},cleanup:{state:'not_needed'}};
   await this.save(run);
   try{
    await this.io.listen(run.appId,run.startedAt,600000);
@@ -34,7 +36,7 @@ class TestRunner {
   let r=this.run;if(!r||!['running','cleanup_pending','cleanup_uncertain'].includes(r.state))return r;
   if(r.state.startsWith('cleanup'))return this.cleanup(r);
   if(r.epoch!==this.onboarding.state.epoch)return this.finish(false,'TEST_CONFIGURATION_CHANGED');
-  if(this.now()>=r.deadline)return this.finish(false,'TEST_DEADLINE_EXCEEDED');
+  const expired=this.expired(r);if(expired)return this.finish(false,expired);
   try{
    if(r.stage==='event'){
     const entry=Object.entries(this.b.state.events).find(([,e])=>e.appId===r.appId&&e.guid===r.guid);
@@ -48,10 +50,12 @@ class TestRunner {
     const t=await this.b.dispatch(r.guid,r.target);
     if(t.state==='uncertain')return this.finish(false,'TEST_DELIVERY_UNCERTAIN');
     if(!t.targetTaskId)fail('TEST_DELIVERY_RECEIPT_INVALID');
-    r={...r,stage:'result',delivery:{taskId:t.targetTaskId,requestKey:t.dispatch.requestKey}};await this.save(r);
+    const acceptedAt=this.now();
+    r={...r,stage:'result',acceptedAt,queueDeadline:acceptedAt+QUEUE_BUDGET,delivery:{taskId:t.targetTaskId,requestKey:t.dispatch.requestKey}};await this.save(r);
    }
    let t=this.b.task(r.guid);
    if(["write_uncertain","write_failed","writing"].includes(t.state))t=await this.b.reconcile(r.guid);
+   if(r.workStartedAt==null&&this.started(t)){const workStartedAt=this.now();r={...r,workStartedAt,workDeadline:workStartedAt+WORK_BUDGET};await this.save(r);}
    if(['write_blocked','write_failed','stopped','needs_input'].includes(t.state)&&t.error!=='FILE_GRANT_REQUIRED')return this.finish(false,t.error||'TEST_RESULT_BLOCKED');
    if(t.state==='done'){
     const snap=await this.b.remote.get(r.guid);
@@ -77,6 +81,14 @@ class TestRunner {
  async cleanup(r){
   await this.io.stop();
   if(!r.guid){await this.save({...r,state:'create_uncertain',error:'TEST_GUID_UNKNOWN'});return this.run;}
+  // 伙伴仍在执行时不得删除飞书任务，否则在途执行会立刻 TASK_NOT_FOUND。
+  const inflight=await this.inFlight(r);
+  if(inflight){
+   const since=r.cleanup.since||this.now();
+   const wait={...r.cleanup,state:'waiting',reason:inflight,since};
+   await this.save(this.now()-since>=SETTLE_BUDGET?{...r,cleanup:wait,state:'cleanup_uncertain',error:'TEST_AGENT_IN_FLIGHT'}:{...r,cleanup:wait});
+   return this.run;
+  }
   // Revoke report generation before cleanup. This cannot stop an already-running partner.
   await this.b.serial(async()=>{const t=this.b.state.tasks[r.guid];if(t&&t.state!=='stopped'){await this.b.stop(r.guid);}});
   try{
@@ -87,10 +99,28 @@ class TestRunner {
     await this.io.remove(r);absent=await this.io.absent(r);
    }
    if(absent.absent!==true)fail('TEST_CLEANUP_READBACK_FAILED');
-   r={...r,cleanup:{state:'verified',receipt:absent},state:r.outcome||'failed',stage:'finished'};await this.save(r);
+   r={...r,cleanup:{state:'verified',receipt:absent},state:r.outcome||'failed',stage:'finished'};if(r.error==='TEST_AGENT_IN_FLIGHT')delete r.error;await this.save(r);
    if(r.state==='passed')await this.b.serial(async()=>{const n=clone(this.b.state);for(const k of ['permissions','registration','subscription','events'])n.onboarding[k]={...n.onboarding[k],runtime:{state:'verified',guid:r.guid,epoch:r.epoch}};n.onboarding.publication={...n.onboarding.publication,runtime:{state:'observed',taskCapabilitiesVerified:true,guid:r.guid,epoch:r.epoch}};await this.b.save(n);});
   }catch(e){await this.save({...r,state:'cleanup_uncertain',error:e.code||'TEST_CLEANUP_UNKNOWN'});}
   return this.run;
+ }
+ expired(r){
+  const now=this.now();
+  if(!r.delivery)return now>=r.deadline?'TEST_DEADLINE_EXCEEDED':null;
+  if(r.workStartedAt==null)return now>=r.queueDeadline?'TEST_QUEUE_TIMEOUT':null;
+  return now>=r.workDeadline?'TEST_DEADLINE_EXCEEDED':null;
+ }
+ started(t){return Boolean(t)&&(t.startedAt!=null||['writing','write_uncertain','write_failed'].includes(t.state));}
+ async inFlight(r){
+  if(!r.delivery)return null;
+  const t=this.b.task(r.guid);
+  if(t&&['writing','write_uncertain','write_failed'].includes(t.state))return 'TASK_WRITING';
+  if(t&&t.state==='done')return null;
+  if(typeof this.b.inspectExecution!=='function')return null;
+  let x;try{x=await this.b.inspectExecution(r.guid);}catch(e){return 'EXECUTION_RECEIPT_UNREADABLE';}
+  const receipt=x?.executionReceipt;
+  if(!receipt||receipt.settled===true)return null;
+  return ['pending','accepted','cancelled'].includes(receipt.status)?'EXECUTION_IN_FLIGHT':null;
  }
  async cancel(){return this.serial(async()=>{if(!this.run||this.run.state!=='running')fail('TEST_NOT_RUNNING');return this.finish(false,'TEST_CANCELLED');});}
 }
