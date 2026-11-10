@@ -1,0 +1,96 @@
+{
+  "version": "0.1.130",
+  "source": {
+    "sourceCommit": "c0252b6d594ce8cd1ee6da900fbadfb70c5c8c23",
+    "builtAt": "2026-11-10T11:47:42.875+08:00"
+  },
+  "scope": "Installed code and plugin worker in isolated VM + static shipped documentation; no live IPC, credentials, network or real tasks",
+  "pluginWorkerProbe": {
+    "version": 1,
+    "authorization": true,
+    "hostServicesEntry": true,
+    "childSpawn": true
+  },
+  "publicPreload": {
+    "targets": [
+      "capabilities",
+      "list",
+      "resolve",
+      "send",
+      "get",
+      "cancel"
+    ],
+    "tasks": [
+      "capabilities",
+      "models",
+      "setModel",
+      "requestWriteAccess",
+      "startTeam",
+      "getTeam",
+      "setTeamPlan",
+      "releaseWorker",
+      "create",
+      "list",
+      "get",
+      "send",
+      "getRun",
+      "listRuns",
+      "cancel",
+      "readMessages",
+      "setHidden",
+      "archive"
+    ],
+    "fetch": true,
+    "fs": true,
+    "node": true
+  },
+  "nodeBootstrap": [
+    "spawnEntry",
+    "bindDeviceAuthorization",
+    "bindHostServices",
+    "bindAuthorization"
+  ],
+  "staticIndicators": {
+    "saveMethods": false,
+    "settingsMethod": false,
+    "bindHostServices": true,
+    "nodeAuthorizationRoute": false,
+    "uploadDir": true,
+    "secretBindings": true,
+    "cancelWarning": true
+  },
+  "fingerprints": {
+    ".vite/build/ghostPreload.js": {
+      "bytes": 4079,
+      "sha256": "db51a0937c1f23089cb96a0ebfe911bd6a07521faacfb4b8c86c5e8beb4cbad3"
+    },
+    ".vite/build/nodeRuntimeWorkerProcess.js": {
+      "bytes": 33769,
+      "sha256": "4a82a7b84f075721e9b1ccfd10341420ba701bf99863ccfc5af25a2884eb034f"
+    },
+    ".vite/build/bootstrap-electron-BVmfZ_-v.js": {
+      "bytes": 28904616,
+      "sha256": "f3ceaf1a145f88f686d1e4ff97f7d67d83e1e26d1cac728d40b473a83020bc6d"
+    },
+    "references/plugin-manifest.md": {
+      "bytes": 36100,
+      "sha256": "f6159fea6641add5571ec521ea3dc67d3b0f842a37c73ec8924f787c1f913776"
+    },
+    "references/plugin-node-worker.md": {
+      "bytes": 20919,
+      "sha256": "9d7a4702052c83edfb94a886d5c36beabed5778995d0c7599275d9ab01448a61"
+    },
+    "references/plugin-network.md": {
+      "bytes": 32161,
+      "sha256": "38e51ec2ded500b0bf5d38e3083ca310fb2bb44eef1647799b4d8d23c0846c96"
+    },
+    "references/plugin-files-and-library.md": {
+      "bytes": 18028,
+      "sha256": "e210a9f9ff51f96899c6ffb7b3542ca828b58b38c7f14699131be553c67efb92"
+    },
+    "references/plugin-agent-tasks.md": {
+      "bytes": 50020,
+      "sha256": "bc896291126650b918a849e68eacf891860997c01360a749a1dd5bc891dba937"
+    }
+  }
+}

@@ -1,17 +1,19 @@
-# 独立发布
+# 独立发行流程
 
-> 0.15.5 当前仅交付开发源码。缺少 minCindyVersion 的 MANIFEST_INVALID 是清单问题，不能作为运行时证据；真实协议缺口见 compatibility.md。尚无完整兼容版本可填写，以下发行流程暂不能执行，不填占位版本绕过。
+## 0.15.13 发行准备
 
-1. 从最新 main 建分支；修改源码与必要测试。版本需同步 package.json、package-lock.json、plugin/ghost.json，并填写 releaseNotes。
-2. 运行 npm ci、npm run build、npm test、npm run test:ui。用 Cindy Forge 校验并打包 plugin 目录，确认包与构建内容一致。
-3. 检查已有 PR、最新远端 main 及可合并性；通过检查后合并 PR，本地同步 main。
-4. 针对合并提交创建 GitHub tag 和 Release，上传 .cindy 及 SHA256SUMS。测试构建依赖未解除时只能标为预览，不设为稳定最新版。
-5. 正式支持的 Cindy 版本和真实闭环验收都通过后，才更新最低版本并准备 Cindy 插件市场提审。市场发布需从已安装、已使用的确切实例进行预检；GitHub Release 不等于市场上架。
+已确认 `minCindyVersion=0.1.124`，仅支持 macOS。当前安装的 0.1.130 构建完成真实完整闭环；最低接口版本、构建来源差异和未覆盖范围见 [compatibility.md](compatibility.md)。历史预览包与本次发行包的适用范围不同。
 
-## 公开内容
+0.15.13 尚未公开发行，本次保留版本号，只补兼容元数据和发行文档；不修改已验业务实现。安装中的验收副本曾将最低版本保守设为 0.1.130，发行清单在核实首次正式接口版本后改为 0.1.124。
 
-只提交源码、模拟测试、依赖声明、公共文档及必要静态资源。真实授权、任务回执和截图留在本地，evidence、output、dist 不进入 Git。历史私密实验记录不推送到公开仓库。
+1. 从最新 main 创建分支，先检查现有 PR 与远端状态。功能变动需同步 package.json、package-lock.json、plugin/ghost.json 版本和 releaseNotes。
+2. 运行构建、单测和 UI 回归；CI 使用 Node 22 检查 bundle 可重现性。真实闭环与模拟测试分别记录。
+3. 用 Cindy Forge 对源码 `plugin/` 正常打包，不用测试清单替换发行清单。核对包内 manifest、权限、全部文件和源码一致；生成 SHA256SUMS。
+4. 通过 CI 后合并 PR，本地同步最新 main。针对合并提交再次确认包内内容与源码一致，保留源码提交、测试结果和 SHA256SUMS。
+5. 用户要求发布时，才创建 tag/GitHub Release 并上传确切 `.cindy` 包与 SHA256SUMS；准备发行包不自动公开发布。Cindy 市场另走已安装实例的公开贡献预检和审核，不复用其他身份或新增权限。
 
-## 首次预览
+## 包与证据
 
-0.15.2 基于 0.15.1 功能快照建立独立公开发行，整理包内文档并让 UI 测试自动创建输出目录。未改变线上任务、伙伴对应关系或正在排队的循环验收。
+本地交付目录使用受忽略的 `dist/0.15.13/`，包含安装包、SHA256SUMS 和发行摘要。不要把私密验收目录复制进包。Forge 产物为 ZIP，核对文件清单和每项内容（包括 Unix 执行权限），不只检查文件名或整体哈希。
+
+公开仓库只包含源码、模拟测试、依赖、公共契约指纹、脱敏验收说明及静态资源。`output/`、`evidence/`、`dist/` 不进入 Git；账号凭据、真实任务 ID、伙伴身份、截图和原始业务回执仅留本地。初次扫码、跨设备、长期断线和循环两期实测限制不得在 Release 描述中省略。
