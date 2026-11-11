@@ -1,13 +1,13 @@
 'use strict';
 let projectFilter='all',grouping='status';
-const boardColumns=[['scheduled','待开始'],['pending','待处理'],['active','执行中'],['attention','需处理'],['done','已完成']];
+const boardColumns=[['scheduled','待开始'],['pending','待处理'],['active','执行中'],['attention','需处理'],['done','已完成'],['stopped','已停止']];
 function bucket(t){if(t.state==='scheduled')return 'scheduled';if(t.state==='done')return 'done';if(t.state==='stopped')return 'stopped';if(t.state==='pending'&&!t.queueError)return 'pending';if(['delivered','running','writing','dispatching'].includes(t.state))return 'active';return 'attention';}
 function listKey(t,l){return (t.appId||t.applicationId||'')+':'+l.guid;}
 function listName(l){return l.name||'清单 · '+l.guid.slice(-6);}
 function taskApp(t){return (state.applications||[]).find(a=>a.id===t.applicationId||a.connection?.appId===t.appId);}
 function creatorName(c){return c?.name||(c?.id?'创建人 · '+c.id.slice(-6):'未提供创建人');}
 function boardGroups(tasks){
- if(grouping==='status'){const cols=filter==='all'?boardColumns:filter==='stopped'?[['stopped','已停止']]:boardColumns.filter(([k])=>k===filter);return cols.map(([id,label])=>({id,label,tasks:tasks.filter(t=>bucket(t)===id)}));}
+ if(grouping==='status'){const cols=filter==='all'?boardColumns:boardColumns.filter(([k])=>k===filter);return cols.map(([id,label])=>({id,label,tasks:tasks.filter(t=>bucket(t)===id)}));}
  const groups=new Map();
  for(const t of tasks){
   let keys;
@@ -28,9 +28,9 @@ function renderTasks(){
  const t=state.tasks.find(t=>taskKey(t)===selected);
  if(detail&&t){app.innerHTML=taskDetails(t);return;}
  const lists=new Map();for(const t of state.tasks)for(const l of t.snapshot?.tasklists||[])lists.set(listKey(t,l),listName(l));
- const tasks=state.tasks.filter(t=>(t.snapshot?.title||'').includes(query)&&(projectFilter==='all'||(projectFilter==='none'?!t.snapshot?.tasklists?.length:t.snapshot?.tasklists?.some(l=>listKey(t,l)===projectFilter)))&&(filter==='all'?t.state!=='stopped':bucket(t)===filter));
+ const tasks=state.tasks.filter(t=>(t.snapshot?.title||'').includes(query)&&(projectFilter==='all'||(projectFilter==='none'?!t.snapshot?.tasklists?.length:t.snapshot?.tasklists?.some(l=>listKey(t,l)===projectFilter)))&&(filter==='all'||bucket(t)===filter));
  const groups=boardGroups(tasks);
- app.innerHTML='<div class="toolbar task-toolbar"><input id="search" aria-label="搜索任务" placeholder="搜索任务" value="'+esc(query)+'"><select id="project-filter" aria-label="任务清单"><option value="all">全部清单</option><option value="none" '+(projectFilter==='none'?'selected':'')+'>未显示清单</option>'+[...lists].map(([id,name])=>'<option value="'+esc(id)+'" '+(projectFilter===id?'selected':'')+'>'+esc(name)+'</option>').join('')+'</select><select id="filter" aria-label="任务状态">'+[['all','全部状态'],...boardColumns,['stopped','已停止']].map(([v,l])=>'<option value="'+v+'" '+(filter===v?'selected':'')+'>'+l+'</option>').join('')+'</select>'+groupSelector()+button('刷新','refresh')+'</div><div class="kanban" aria-label="任务看板">'+groups.map(({id,label,tasks:items})=>{return '<section class="board-column" data-group="'+esc(id)+'" aria-label="'+esc(label)+'"><header><h2>'+esc(label)+'</h2><span>'+items.length+'</span></header><div class="board-cards">'+items.map(taskCard).join('')+'</div></section>';}).join('')+'</div>'+(tasks.length?'':'<p class="empty">暂无任务</p>');
+ app.innerHTML='<div class="toolbar task-toolbar"><input id="search" aria-label="搜索任务" placeholder="搜索任务" value="'+esc(query)+'"><select id="project-filter" aria-label="任务清单"><option value="all">全部清单</option><option value="none" '+(projectFilter==='none'?'selected':'')+'>未显示清单</option>'+[...lists].map(([id,name])=>'<option value="'+esc(id)+'" '+(projectFilter===id?'selected':'')+'>'+esc(name)+'</option>').join('')+'</select><select id="filter" aria-label="任务状态">'+[['all','全部状态'],...boardColumns].map(([v,l])=>'<option value="'+v+'" '+(filter===v?'selected':'')+'>'+l+'</option>').join('')+'</select>'+groupSelector()+button('刷新','refresh')+'</div><div class="kanban" aria-label="任务看板">'+groups.map(({id,label,tasks:items})=>{return '<section class="board-column" data-group="'+esc(id)+'" aria-label="'+esc(label)+'"><header><h2>'+esc(label)+'</h2><span>'+items.length+'</span></header><div class="board-cards">'+items.map(taskCard).join('')+'</div></section>';}).join('')+'</div>'+(tasks.length?'':'<p class="empty">暂无任务</p>');
 }
 function taskDetails(t){
  const s=t.snapshot||{},a=taskApp(t),url=safeTaskURL(s.sourceUrl),rule=s.repeatRule||t.cycle?.rule;
