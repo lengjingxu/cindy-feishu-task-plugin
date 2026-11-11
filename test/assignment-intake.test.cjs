@@ -25,3 +25,17 @@ test('补收拒绝已取消指派、已完成及多负责人的任务',async()=>
   await assert.rejects(f.b.recoverAssigned('task'));assert.equal(Object.keys(f.b.state.tasks).length,0);assert.equal(f.sends,0);
  }
 });
+
+// Native Feishu Execute now emits task_agent_start, not task_create.
+test('原生立即执行：真实新开工事件接入旧任务且只投递一次',async()=>{
+ const f=await fixture();f.snapshot.assigned=true;f.snapshot.soleAppAssignee=true;f.snapshot.agentStatus=1;
+ f.b.state.connection.assignmentBaseline={appId:'app',at:100,assigned:['task']};
+ const t=await f.event('start',{agentStartRequested:true,eventAt:120});assert.equal(t.state,'pending');assert.equal(f.b.state.events['app:start'].intake,'explicit_start');
+ await f.b.drain();await f.event('again',{agentStartRequested:true,eventAt:130});await f.b.drain();assert.equal(f.sends,1);
+});
+test('开工请求拒绝缺失/过期/未来时间、非唯一执行人、已执行/完成/撤销任务和一般更新',async()=>{
+ for(const kind of ['missing','old','future','multiple','running','completed','unassigned','deleted','ordinary']){
+  const f=await fixture();Object.assign(f.snapshot,{assigned:kind!=='unassigned',soleAppAssignee:kind!=='multiple',agentStatus:kind==='running'?2:1,done:kind==='completed',deleted:kind==='deleted'});
+  assert.equal(await f.event(kind,{agentStartRequested:kind!=='ordinary',eventAt:kind==='missing'?null:kind==='old'?90:kind==='future'?200:120}),null);assert.equal(f.sends,0);
+ }
+});

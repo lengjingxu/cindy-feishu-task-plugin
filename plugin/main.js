@@ -204,16 +204,18 @@
             }
             const observationKey = e.appId + ":" + e.guid, prior = next.assignmentObservations?.[observationKey];
             const observedAt = this.now(), baseline = next.connection?.assignmentBaseline;
-            const afterEnable = e.assigneesChanged === true && Number.isSafeInteger(e.eventAt) && Number.isFinite(e.baseline) && e.eventAt >= e.baseline && e.eventAt <= observedAt;
+            const freshEvent = Number.isSafeInteger(e.eventAt) && Number.isFinite(e.baseline) && e.eventAt >= e.baseline && e.eventAt <= observedAt;
+            const afterEnable = e.assigneesChanged === true && freshEvent;
             const priorUnassigned = prior?.assigned === false && prior.observedAt >= e.baseline && prior.observedAt < e.eventAt;
             const inventoryProven = baseline?.appId === e.appId && baseline.at === e.baseline && Array.isArray(baseline.assigned) && !baseline.assigned.includes(e.guid);
             const assignmentProven = afterEnable && (priorUnassigned || inventoryProven);
+            const startRequested = e.agentStartRequested === true && freshEvent && snapshot.soleAppAssignee === true && snapshot.agentStatus === 1;
             next.assignmentObservations ||= {};
             if (!prior || !Number.isSafeInteger(e.eventAt) || e.eventAt >= (prior.eventAt || 0))
               next.assignmentObservations[observationKey] = { assigned: snapshot.assigned === true, observedAt, eventAt: e.eventAt || 0 };
             if (!t && e.assigneesChanged && !assignmentProven) next.events[eventKey].intake = "assignment_unproven";
-            if (!t && (e.isCreate && Number.isFinite(e.baseline) && snapshot.createdAt >= e.baseline || assignmentProven) && snapshot.assigned && !snapshot.done && !snapshot.deleted) {
-              next.events[eventKey].intake = assignmentProven ? "live_assignment" : "created";
+            if (!t && (e.isCreate && Number.isFinite(e.baseline) && snapshot.createdAt >= e.baseline || assignmentProven || startRequested) && snapshot.assigned && !snapshot.done && !snapshot.deleted) {
+              next.events[eventKey].intake = startRequested ? "explicit_start" : assignmentProven ? "live_assignment" : "created";
               t = next.tasks[e.guid] = { id: e.guid, appId: e.appId, partnerId: e.partnerId, queuedTarget: e.partnerId ? { kind: "bot", id: e.partnerId } : null, bindingId: this.uuid(), generation: 1, sequence: 0, reports: {}, state: "pending" };
             }
             if (t) {
