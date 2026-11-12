@@ -27,10 +27,10 @@ class GrantedUpload {
     // No token in Node may be returned to main or injected via an ignored Authorization header.
     if (!this.authenticated()) fail("HOST_UPLOAD_AUTH_UNAVAILABLE");
   }
-  async send(taskGuid, artifact, grant, callId) {
+  async send(taskGuid, artifact, grant, callId,executionId) {
     this.prepare(artifact, grant);
     const response = await this.fetch({ url: "https://open.feishu.cn/open-apis/task/v2/attachments/upload", method: "POST",
-      uploadDir: { ...grantFor(artifact, grant), fields: { resource_type: "task_delivery", resource_id: taskGuid } }, callId });
+      uploadDir: { ...grantFor(artifact, grant), fields: { resource_type: "task_delivery", resource_id: taskGuid,...(executionId?{execution_id:executionId}:{}) } }, callId });
     if (!response.ok || response.status < 200 || response.status >= 300 || response.truncated) fail("FILE_UPLOAD_UNCERTAIN");
     let body; try { body = JSON.parse(response.body); } catch { fail("FILE_UPLOAD_UNCERTAIN"); }
     if (body.code !== 0 || body.data?.items?.length !== 1) fail("FILE_UPLOAD_UNCERTAIN");

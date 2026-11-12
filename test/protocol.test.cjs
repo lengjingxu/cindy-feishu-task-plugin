@@ -23,7 +23,7 @@ test("监听处理器等main持久化确认，暂停清理待确认事件",async
  const l=new Listener({WSClient:WS,EventDispatcher:D},(method,params)=>notifications.push({method,params}));const run=l.run({appId,durationMs:30000,baseline:100},"secret");await new Promise(r=>setImmediate(r));let done=false;
  const event=dispatcher.handlers["task.task.update_user_access_v2"]({app_id:appId,event_id:"e",task_guid:guid,create_time:"200",event_types:["task_create","task_assignees_update"]}).then(()=>{done=true});
  await new Promise(r=>setImmediate(r));assert.equal(done,false);assert.equal(notifications[0].params.event.eventAt,200);assert.equal(notifications[0].params.event.assigneesChanged,true);assert.equal(notifications[0].params.event.agentStartRequested,false);assert.deepEqual(notifications[0].params.event.eventTypes,["task_create","task_assignees_update"]);l.ack({token:notifications[0].params.token,accepted:true});await event;
- const start=dispatcher.handlers["task.task.update_user_access_v2"]({app_id:appId,event_id:"start",task_guid:guid,create_time:"201",event_types:["task_agent_start","bad-token!",null]});await new Promise(r=>setImmediate(r));assert.equal(notifications[1].params.event.agentStartRequested,true);assert.deepEqual(notifications[1].params.event.eventTypes,["task_agent_start"]);l.ack({token:notifications[1].params.token,accepted:true});await start;
+ const start=dispatcher.handlers["task.task.update_user_access_v2"]({app_id:appId,event_id:"start",execution_id:"run_real-123",task_guid:guid,create_time:"201",event_types:["task_agent_start","bad-token!",null]});await new Promise(r=>setImmediate(r));assert.equal(notifications[1].params.event.agentStartRequested,true);assert.equal(notifications[1].params.event.executionId,"run_real-123");assert.deepEqual(notifications[1].params.event.eventTypes,["task_agent_start"]);l.ack({token:notifications[1].params.token,accepted:true});await start;
  const pending=dispatcher.handlers["task.task.update_user_access_v2"]({app_id:appId,event_id:"e2",task_guid:guid,event_types:[]});const rejected=assert.rejects(pending,/LISTENER_STOPPED/);l.stop();await run;await rejected;assert(closed);assert.equal(l.pending.size,0);assert.equal(l.current,null);
 });
 test("子进程暂停等待真实退出，租期结束无存活进程",async()=>{
@@ -54,4 +54,16 @@ test('文件上传凭据只传私有Host方法，任务撤销后零上传',async
  const fetcher=async url=>response(url.includes('/auth/')?{code:0,tenant_access_token:'private-token'}:{code:0,data:{task:{members:assigned?[{id:appId,type:'app',role:'assignee'}]:[],status:'todo'}}});
  const host={authenticatedFetch:async(request,authorization)=>{sends++;assert.equal(request,upload);assert.equal(authorization,'Bearer private-token');return{ok:true,status:200,body:'{}'}}};
  const result=await action({appId,action:'upload',request:upload},'synthetic',fetcher,host);assert.equal(result.ok,true);assert(!JSON.stringify(result).includes('private-token'));assigned=false;await assert.rejects(action({appId,action:'upload',request:upload},'synthetic',fetcher,host),{code:'SOURCE_REVOKED'});assert.equal(sends,1);
+});
+
+test('任务PATCH保留限长脱敏错误和log_id，鉴权错误不附诊断',async()=>{
+ const fetcher=async(url,init)=>response(url.includes('/auth/')?{code:0,tenant_access_token:'token'}:init.method==='PATCH'?{code:1470400,msg:'invalid status '+ 'X'.repeat(40),error:{log_id:'20261112-abcdef12'}}:{code:0,data:{task:{summary:'title',description:'desc',members:[{id:appId,type:'app',role:'assignee'}]}}});
+ await assert.rejects(action({appId,guid,action:'write',expectedTitle:'title',expectedDescription:'desc',operation:{kind:'progress',value:{status:2,message:'开始'}}},'secret',fetcher),e=>e.code==='FEISHU_API_1470400'&&e.taskDiagnostic.message==='invalid status [redacted]'&&e.taskDiagnostic.logId==='20261112-abcdef12');
+ await assert.rejects(action({appId,action:'check'},'secret',async()=>response({code:10003,msg:'private authentication detail'})),e=>!e.taskDiagnostic);
+});
+
+test('受控任务PATCH使用真实轮次作为顶层字段，不混入task更新字段',async()=>{
+ let patch;const fetcher=async(url,init)=>{if(init.method==='PATCH')patch=JSON.parse(init.body);return response(url.includes('/auth/')?{code:0,tenant_access_token:'token'}:init.method==='PATCH'?{code:0}:{code:0,data:{task:{summary:'title',description:'desc',members:[{id:appId,type:'app',role:'assignee'}]}}});};
+ await action({appId,guid,action:'write',executionId:'run_real-123',expectedTitle:'title',expectedDescription:'desc',operation:{kind:'progress',value:{status:2,message:'开始'}}},'secret',fetcher);
+ assert.equal(patch.execution_id,'run_real-123');assert.equal(patch.task.execution_id,undefined);assert(!patch.update_fields.includes('execution_id'));
 });

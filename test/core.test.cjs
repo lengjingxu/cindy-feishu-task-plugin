@@ -154,3 +154,31 @@ test('cancel-before-send墓碑可无target/taskId且不重发',async()=>{
  const f=await fixture();f.targets.send=async p=>{f.sends.push(p);throw Error('lost')};await assigned(f);queryable(f,{status:'cancelled',settled:true,target:undefined,taskId:undefined});assert.equal((await f.b.inspectExecution('task-1')).state,'stopped');assert.equal(f.sends.length,1);
 });
 test('相同远程快照和执行回执重复检查不保存',async()=>{const f=await fixture();await assigned(f);await f.b.inspect('task-1');const revision=f.b.state.revision;await f.b.inspect('task-1');assert.equal(f.b.state.revision,revision);queryable(f);await f.b.inspectExecution('task-1');const receiptRevision=f.b.state.revision;await f.b.inspectExecution('task-1');assert.equal(f.b.state.revision,receiptRevision);queryable(f,{settled:true,result:{outcome:'completed',instanceId:'native',generation:1}});await f.b.inspectExecution('task-1');assert(f.b.state.revision>receiptRevision);});
+
+test('已结算执行仅释放回写受阻占位，旧账本保持待核实且不重写',async()=>{
+ const f=await fixture();const old=await assigned(f);f.remote.write=async()=>{throw Error('unknown write')};
+ await f.b.report('progress',{bindingId:old.bindingId,generation:1,sequence:1,message:'开始'},'canonical-1');
+ await f.add({...f.event,id:'next',guid:'next'});await rejects(f.b.dispatch('next',target),'TARGET_BUSY');
+ const receipt={found:true,requestKey:old.dispatch.requestKey,executionId:old.receipt.executionId,target,taskId:old.targetTaskId,status:'accepted',settled:true,result:{instanceId:'run',generation:1,outcome:'completed'}};
+ f.targets.get=async()=>receipt;await f.b.inspectExecution('task-1');const before=copy(f.b.task('task-1'));
+ await f.b.dispatch('next',target);assert.equal(f.sends.length,2);assert.deepEqual(f.b.task('task-1'),before);assert.equal(before.state,'write_uncertain');assert.equal(before.outbox[0].state,'attempted');
+});
+test('未结算、来源不匹配或等待输入不能释放伙伴占位',()=>{
+ const {holdsPartner}=require('../src/core.cjs');const task={state:'write_uncertain',dispatch:{requestKey:'key',target},targetTaskId:'session',receipt:{executionId:'plugin-target:run'},executionReceipt:{found:true,status:'accepted',settled:true,requestKey:'key',target,taskId:'session',executionId:'plugin-target:run',result:{outcome:'completed'}}};
+ assert.equal(holdsPartner(task),false);
+ for(const delta of [{settled:false},{requestKey:'other'},{taskId:'other'},{executionId:'plugin-target:other'},{target:{kind:'bot',id:'other'}}])assert.equal(holdsPartner({...task,executionReceipt:{...task.executionReceipt,...delta}}),true);
+ assert.equal(holdsPartner({...task,state:'needs_input'}),true);assert.equal(holdsPartner({...task,orphanedDelivery:true}),true);
+});
+
+test('只修正明确校验拒绝的旧超长结果进度，保留正文与拒绝证据',async()=>{
+ const f=await fixture();await reported(f);const t=f.b.state.tasks['task-1'];t.state='write_uncertain';t.error='FEISHU_API_99992402';t.writeDiagnostic={message:'field validation failed'};
+ t.result.summary='完整正文'.repeat(80);t.outbox[1]={id:'rejected',kind:'progress',state:'attempted',value:{message:t.result.summary,status:3}};t.outbox[2].state='prepared';f.snap.done=false;f.snap.agentStatus=2;
+ const oldText=f.writes.filter(w=>w.kind==='text').length;const repaired=await f.b.repairResultProgress('task-1');
+ assert.equal(repaired.state,'done');assert.equal(repaired.rejectedWrites[0].value.message,t.result.summary);assert.equal(repaired.outbox[1].value.message,'结果已回报');assert.equal(f.writes.filter(w=>w.kind==='text').length,oldText);
+});
+test('未知结果或不匹配的校验错误不能重置写入',async()=>{
+ for(const error of ['WRITE_OUTCOME_UNKNOWN','FEISHU_TRANSPORT_UNKNOWN','FEISHU_API_1470400']){
+  const f=await fixture();await reported(f);const t=f.b.state.tasks['task-1'];t.state='write_uncertain';t.error=error;t.writeDiagnostic={message:'field validation failed'};t.result.summary='全文'.repeat(100);t.outbox[1]={id:'unknown',kind:'progress',state:'attempted',value:{message:t.result.summary,status:3}};
+  await rejects(f.b.repairResultProgress('task-1'),'PROGRESS_REPAIR_NOT_AVAILABLE');assert.equal(t.outbox[1].state,'attempted');
+ }
+});

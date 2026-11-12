@@ -26,6 +26,7 @@ class Listener {
           const timer = setTimeout(() => { this.pending.delete(token); reject(new Error("PERSISTENCE_TIMEOUT")); }, 10000);
           this.pending.set(token, { resolve, reject, timer });
           this.notify("inbox/event", { token, event: { id: data.event_id, guid: data.task_guid, appId: data.app_id,
+            executionId:typeof data.execution_id==='string'&&/^[A-Za-z0-9:_-]{1,256}$/.test(data.execution_id)?data.execution_id:null,
             eventTypes: Array.isArray(data.event_types) ? data.event_types.filter(x=>typeof x==='string'&&/^[a-zA-Z0-9_]{1,100}$/.test(x)).slice(0,32) : [],
             eventAt: /^\d+$/.test(data.create_time || "") && Number.isSafeInteger(Number(data.create_time)) ? Number(data.create_time) : null,
             assigneesChanged: Array.isArray(data.event_types) && data.event_types.includes("task_assignees_update"),

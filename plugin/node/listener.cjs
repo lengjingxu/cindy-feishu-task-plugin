@@ -112634,12 +112634,12 @@ var require_artifacts = __commonJS({
       prepare(artifact, grant) {
         grantFor(artifact, grant), this.authenticated() || fail("HOST_UPLOAD_AUTH_UNAVAILABLE");
       }
-      async send(taskGuid, artifact, grant, callId) {
+      async send(taskGuid, artifact, grant, callId, executionId) {
         this.prepare(artifact, grant);
         let response = await this.fetch({
           url: "https://open.feishu.cn/open-apis/task/v2/attachments/upload",
           method: "POST",
-          uploadDir: { ...grantFor(artifact, grant), fields: { resource_type: "task_delivery", resource_id: taskGuid } },
+          uploadDir: { ...grantFor(artifact, grant), fields: { resource_type: "task_delivery", resource_id: taskGuid, ...executionId ? { execution_id: executionId } : {} } },
           callId
         });
         (!response.ok || response.status < 200 || response.status >= 300 || response.truncated) && fail("FILE_UPLOAD_UNCERTAIN");
@@ -112682,7 +112682,13 @@ var require_core = __commonJS({
     function fail(code) {
       throw Object.assign(new Error(code), { code });
     }
-    var active = /* @__PURE__ */ new Set(["dispatching", "uncertain", "delivered", "running", "review", "needs_input", "write_blocked", "writing", "write_uncertain", "write_failed", "cancel_check"]), changed = (t, snapshot) => !!(t.dispatch && (t.snapshot.title !== snapshot.title || t.snapshot.description !== snapshot.description || !snapshot.done && t.snapshot.contextVersion && snapshot.contextVersion && !snapshot.contextErrors?.length && contextKey(t.snapshot) !== contextKey(snapshot)));
+    var active = /* @__PURE__ */ new Set(["dispatching", "uncertain", "delivered", "running", "review", "needs_input", "write_blocked", "writing", "write_uncertain", "write_failed", "cancel_check"]);
+    function holdsPartner(t) {
+      if (!active.has(t.state) && !t.orphanedDelivery) return !1;
+      let r = t.executionReceipt, d = t.dispatch;
+      return !(["write_blocked", "write_failed", "write_uncertain"].includes(t.state) && !t.orphanedDelivery && r?.found === !0 && r.settled === !0 && r.status === "accepted" && r.result?.outcome === "completed" && d && r.requestKey === d.requestKey && r.target?.kind === d.target.kind && r.target?.id === d.target.id && r.taskId === t.targetTaskId && typeof r.executionId == "string" && r.executionId.startsWith("plugin-target:") && r.executionId === t.receipt?.executionId);
+    }
+    var changed = (t, snapshot) => !!(t.dispatch && (t.snapshot.title !== snapshot.title || t.snapshot.description !== snapshot.description || !snapshot.done && t.snapshot.contextVersion && snapshot.contextVersion && !snapshot.contextErrors?.length && contextKey(t.snapshot) !== contextKey(snapshot)));
     function plan(t, snapshot, now) {
       t.dispatch || (t.schedule = schedule(snapshot, t.schedule?.timeZone), !t.dispatch && ["pending", "scheduled"].includes(t.state) && (t.nextAttemptAt = 0, t.state = t.schedule.error || !t.schedule.notBefore || t.schedule.notBefore <= now ? "pending" : "scheduled", t.schedule.error ? t.queueError = t.schedule.error : delete t.queueError));
     }
@@ -112731,8 +112737,23 @@ var require_core = __commonJS({
           }
           let next = clone(this.state), t = next.tasks[e.guid], ownCompletion = t?.outbox?.some((op) => op.kind === "complete" && op.state === "attempted" && this.remote.matches(snapshot, op));
           t && !["done", "stopped"].includes(t.state) && (!snapshot.assigned || snapshot.deleted || snapshot.done && !ownCompletion || changed(t, snapshot)) && (t.orphanedDelivery = !!t.dispatch, t.state = "stopped", t.generation++);
-          let observationKey = e.appId + ":" + e.guid, prior = next.assignmentObservations?.[observationKey], observedAt = this.now(), baseline = next.connection?.assignmentBaseline, freshEvent = Number.isSafeInteger(e.eventAt) && Number.isFinite(e.baseline) && e.eventAt >= e.baseline && e.eventAt <= observedAt, afterEnable = e.assigneesChanged === !0 && freshEvent, priorUnassigned = prior?.assigned === !1 && prior.observedAt >= e.baseline && prior.observedAt < e.eventAt, inventoryProven = baseline?.appId === e.appId && baseline.at === e.baseline && Array.isArray(baseline.assigned) && !baseline.assigned.includes(e.guid), assignmentProven = afterEnable && (priorUnassigned || inventoryProven), startRequested = e.agentStartRequested === !0 && freshEvent && snapshot.soleAppAssignee === !0 && snapshot.agentStatus === 1;
-          return next.assignmentObservations ||= {}, (!prior || !Number.isSafeInteger(e.eventAt) || e.eventAt >= (prior.eventAt || 0)) && (next.assignmentObservations[observationKey] = { assigned: snapshot.assigned === !0, observedAt, eventAt: e.eventAt || 0 }), !t && e.assigneesChanged && !assignmentProven && (next.events[eventKey].intake = "assignment_unproven"), !t && (e.isCreate && Number.isFinite(e.baseline) && snapshot.createdAt >= e.baseline || assignmentProven || startRequested) && snapshot.assigned && !snapshot.done && !snapshot.deleted && (next.events[eventKey].intake = startRequested ? "explicit_start" : assignmentProven ? "live_assignment" : "created", t = next.tasks[e.guid] = { id: e.guid, appId: e.appId, partnerId: e.partnerId, queuedTarget: e.partnerId ? { kind: "bot", id: e.partnerId } : null, bindingId: this.uuid(), generation: 1, sequence: 0, reports: {}, state: "pending" }), t && (t.snapshot = snapshot, plan(t, snapshot, this.now())), next.events[eventKey].pending = !1, await this.save(next), t ? clone(t) : null;
+          let observationKey = e.appId + ":" + e.guid, prior = next.assignmentObservations?.[observationKey], observedAt = this.now(), baseline = next.connection?.assignmentBaseline, freshEvent = Number.isSafeInteger(e.eventAt) && Number.isFinite(e.baseline) && e.eventAt >= e.baseline && e.eventAt <= observedAt, afterEnable = e.assigneesChanged === !0 && freshEvent, priorUnassigned = prior?.assigned === !1 && prior.observedAt >= e.baseline && prior.observedAt < e.eventAt, inventoryProven = baseline?.appId === e.appId && baseline.at === e.baseline && Array.isArray(baseline.assigned) && !baseline.assigned.includes(e.guid), assignmentProven = afterEnable && (priorUnassigned || inventoryProven), startRequested = e.agentStartRequested === !0 && freshEvent && (!prior || !Number.isSafeInteger(prior.eventAt) || e.eventAt > prior.eventAt) && !t?.previousExecutions?.some((old) => old.feishuExecutionId && old.feishuExecutionId === e.executionId) && snapshot.soleAppAssignee === !0 && snapshot.agentStatus === 1;
+          if (next.assignmentObservations ||= {}, (!prior || !Number.isSafeInteger(e.eventAt) || e.eventAt >= (prior.eventAt || 0)) && (next.assignmentObservations[observationKey] = { assigned: snapshot.assigned === !0, observedAt, eventAt: e.eventAt || 0 }), !t && e.assigneesChanged && !assignmentProven && (next.events[eventKey].intake = "assignment_unproven"), !t && (e.isCreate && Number.isFinite(e.baseline) && snapshot.createdAt >= e.baseline || assignmentProven || startRequested) && snapshot.assigned && !snapshot.done && !snapshot.deleted && (next.events[eventKey].intake = startRequested ? "explicit_start" : assignmentProven ? "live_assignment" : "created", t = next.tasks[e.guid] = { id: e.guid, appId: e.appId, partnerId: e.partnerId, queuedTarget: e.partnerId ? { kind: "bot", id: e.partnerId } : null, bindingId: this.uuid(), generation: 1, sequence: 0, reports: {}, state: "pending" }), t && startRequested && e.executionId && e.executionId !== t.feishuExecutionId && ["write_uncertain", "write_failed", "write_blocked"].includes(t.state) && !holdsPartner(t) && !t.result) {
+            let history = [...t.previousExecutions || [], { ...t, previousExecutions: void 0 }];
+            t = next.tasks[e.guid] = {
+              id: t.id,
+              appId: t.appId,
+              partnerId: t.partnerId,
+              queuedTarget: { kind: "bot", id: t.partnerId },
+              bindingId: this.uuid(),
+              generation: t.generation + 1,
+              sequence: 0,
+              reports: {},
+              state: "pending",
+              previousExecutions: history
+            };
+          }
+          return t && startRequested && e.executionId && !t.dispatch && (t.feishuExecutionId = e.executionId, t.feishuStartAt = e.eventAt), t && (t.snapshot = snapshot, plan(t, snapshot, this.now())), next.events[eventKey].pending = !1, await this.save(next), t ? clone(t) : null;
         });
       }
       // Explicit recovery of one user-selected missing task. This is a fresh API
@@ -112804,7 +112825,7 @@ var require_core = __commonJS({
             let current = await this.remote.get(id);
             return (!current.assigned || current.deleted || current.done || changed(t, current)) && (await this.stop(id), fail("SOURCE_REVOKED")), this.sendPrepared(id);
           }
-          ["pending", "scheduled"].includes(t.state) || fail("TASK_NOT_DISPATCHABLE"), (target?.kind !== "bot" || !target.id) && fail("TARGET_INVALID"), target.id !== this.partnerTarget(id).id && fail("CONNECTION_PARTNER_MISMATCH"), t.queuedTarget && JSON.stringify(t.queuedTarget) !== JSON.stringify(target) && fail("QUEUED_TARGET_FROZEN"), Object.values(this.state.tasks).some((x) => (active.has(x.state) || x.orphanedDelivery) && x.dispatch?.target.id === target.id) && fail("TARGET_BUSY"), await this.assertExecution();
+          ["pending", "scheduled"].includes(t.state) || fail("TASK_NOT_DISPATCHABLE"), (target?.kind !== "bot" || !target.id) && fail("TARGET_INVALID"), target.id !== this.partnerTarget(id).id && fail("CONNECTION_PARTNER_MISMATCH"), t.queuedTarget && JSON.stringify(t.queuedTarget) !== JSON.stringify(target) && fail("QUEUED_TARGET_FROZEN"), Object.values(this.state.tasks).some((x) => holdsPartner(x) && x.dispatch?.target.id === target.id) && fail("TARGET_BUSY"), await this.assertExecution();
           let resolved = await this.targets.resolve({ target });
           (resolved.id !== target.id || resolved.kind !== "bot") && fail("TARGET_UNAVAILABLE");
           let snapshot = await this.remote.get(id);
@@ -112885,7 +112906,17 @@ var require_core = __commonJS({
 \u9A8C\u8BC1\u8303\u56F4\uFF1A` + n.result.verification, state: "prepared" });
             for (let artifact of artifacts) n.outbox.push({ id: this.uuid(), kind: "file", value: artifact, taskGuid: t.id, state: "prepared" });
           }
-          return n.outbox.push({ id: this.uuid(), kind: "progress", value: { message: args.message, status: kind === "progress" ? 2 : 3 }, state: "prepared" }), kind === "result" && n.outbox.push({ id: this.uuid(), kind: "complete", value: 4, state: "prepared" }), await this.save(next), this.writeRemaining(t.id);
+          return n.outbox.push({ id: this.uuid(), kind: "progress", value: { message: kind === "result" ? "\u7ED3\u679C\u5DF2\u56DE\u62A5" : kind === "clarification" ? "\u7B49\u5F85\u8865\u5145\u4FE1\u606F" : args.message, status: kind === "progress" ? 2 : 3 }, state: "prepared" }), kind === "result" && n.outbox.push({ id: this.uuid(), kind: "complete", value: 4, state: "prepared" }), await this.save(next), this.writeRemaining(t.id);
+        });
+      }
+      async repairResultProgress(id) {
+        return this.serial(async () => {
+          let t = this.task(id), op = t.outbox?.find((x) => x.state === "attempted");
+          (t.state !== "write_uncertain" || t.error !== "FEISHU_API_99992402" || t.writeDiagnostic?.message !== "field validation failed" || !t.result || op?.kind !== "progress" || op.value.message !== t.result.summary || op.value.message.length <= 100) && fail("PROGRESS_REPAIR_NOT_AVAILABLE");
+          let snap = await this.remote.get(id);
+          (!snap.assigned || snap.done || snap.deleted || changed(t, snap)) && fail("SOURCE_REVOKED");
+          let n = clone(this.state), old = n.tasks[id].outbox.find((x) => x.id === op.id);
+          return n.tasks[id].rejectedWrites ||= [], n.tasks[id].rejectedWrites.push({ ...clone(old), diagnostic: n.tasks[id].writeDiagnostic, error: n.tasks[id].error }), old.id = this.uuid(), old.value.message = "\u7ED3\u679C\u5DF2\u56DE\u62A5", old.state = "prepared", delete n.tasks[id].error, delete n.tasks[id].writeDiagnostic, await this.save(n), this.writeRemaining(id);
         });
       }
       async reconcile(id) {
@@ -112900,9 +112931,9 @@ var require_core = __commonJS({
           return t || fail("BINDING_NOT_FOUND"), (!session || session !== t.targetTaskId) && fail("SESSION_MISMATCH"), args.generation !== t.generation && fail("STALE_GENERATION"), ["writing", "write_blocked", "write_uncertain", "write_failed"].includes(t.state) || fail("REPORT_NOT_ACTIVE"), t.outbox.some((op) => op.kind === "file" && op.value.id === args.artifactId) || fail("ARTIFACT_NOT_FOUND"), this.writeRemaining(t.id, { artifactId: args.artifactId, grant, callId });
         });
       }
-      async blocked(id, code, state = "write_blocked") {
+      async blocked(id, code, state = "write_blocked", diagnostic) {
         let next = clone(this.state);
-        return next.tasks[id].state = state, next.tasks[id].error = code, await this.save(next), clone(next.tasks[id]);
+        return next.tasks[id].state = state, next.tasks[id].error = code, diagnostic && (next.tasks[id].writeDiagnostic = clone(diagnostic)), await this.save(next), clone(next.tasks[id]);
       }
       async writeRemaining(id, delivery) {
         if (this.task(id).result && !Array.isArray(this.task(id).result.artifacts)) return this.blocked(id, "LEGACY_ARTIFACT_MANIFEST_REQUIRED");
@@ -112938,7 +112969,7 @@ var require_core = __commonJS({
           try {
             receipt = op.kind === "file" ? await this.remote.upload(id, op.value, delivery.grant, delivery.callId) : await this.remote.write(id, op, snap);
           } catch (e) {
-            return this.blocked(id, e.code || "WRITE_OUTCOME_UNKNOWN", "write_uncertain");
+            return this.blocked(id, e.code || "WRITE_OUTCOME_UNKNOWN", "write_uncertain", e.diagnostic);
           }
           let saved = clone(this.state);
           saved.tasks[id].outbox[i].receipt = receipt || {}, await this.save(saved), op = this.task(id).outbox[i];
@@ -112974,7 +113005,7 @@ var require_core = __commonJS({
         });
       }
     };
-    module2.exports = { Bridge, initial, fail };
+    module2.exports = { Bridge, initial, fail, holdsPartner };
   }
 });
 
@@ -113013,6 +113044,7 @@ var require_listener = __commonJS({
                 id: data.event_id,
                 guid: data.task_guid,
                 appId: data.app_id,
+                executionId: typeof data.execution_id == "string" && /^[A-Za-z0-9:_-]{1,256}$/.test(data.execution_id) ? data.execution_id : null,
                 eventTypes: Array.isArray(data.event_types) ? data.event_types.filter((x) => typeof x == "string" && /^[a-zA-Z0-9_]{1,100}$/.test(x)).slice(0, 32) : [],
                 eventAt: /^\d+$/.test(data.create_time || "") && Number.isSafeInteger(Number(data.create_time)) ? Number(data.create_time) : null,
                 assigneesChanged: Array.isArray(data.event_types) && data.event_types.includes("task_assignees_update"),

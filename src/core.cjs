@@ -3,6 +3,18 @@ const clone = x => JSON.parse(JSON.stringify(x));
 const {schedule,contextKey}=require('./task-schedule.cjs');
 function fail(code) { throw Object.assign(new Error(code), { code }); }
 const active = new Set(["dispatching", "uncertain", "delivered", "running", "review", "needs_input", "write_blocked", "writing", "write_uncertain", "write_failed", "cancel_check"]);
+// A finished execution may still have an unresolved Feishu write. Keep its
+// ledger/outbox frozen, but do not confuse that with an active partner run.
+function holdsPartner(t) {
+  if (!active.has(t.state) && !t.orphanedDelivery) return false;
+  const r=t.executionReceipt,d=t.dispatch;
+  const finishedWrite=['write_blocked','write_failed','write_uncertain'].includes(t.state) && !t.orphanedDelivery &&
+    r?.found===true && r.settled===true && r.status==='accepted' && r.result?.outcome==='completed' &&
+    d && r.requestKey===d.requestKey && r.target?.kind===d.target.kind && r.target?.id===d.target.id &&
+    r.taskId===t.targetTaskId && typeof r.executionId==='string' && r.executionId.startsWith('plugin-target:') &&
+    r.executionId===t.receipt?.executionId;
+  return !finishedWrite;
+}
 const changed = (t, snapshot) => Boolean(t.dispatch && (t.snapshot.title !== snapshot.title || t.snapshot.description !== snapshot.description ||
   (!snapshot.done&&t.snapshot.contextVersion&&snapshot.contextVersion&&!snapshot.contextErrors?.length&&contextKey(t.snapshot)!==contextKey(snapshot))));
 function plan(t,snapshot,now){
@@ -63,6 +75,8 @@ class Bridge {
     // permission to import the enable-time inventory. Recheck its current owner
     // and queued status before accepting it.
     const startRequested=e.agentStartRequested===true && freshEvent
+      && (!prior || !Number.isSafeInteger(prior.eventAt) || e.eventAt>prior.eventAt)
+      && !t?.previousExecutions?.some(old=>old.feishuExecutionId && old.feishuExecutionId===e.executionId)
       && snapshot.soleAppAssignee===true && snapshot.agentStatus===1;
     next.assignmentObservations ||= {};
     // Do not let an out-of-order notification replace a newer observation.
@@ -74,6 +88,16 @@ class Bridge {
       next.events[eventKey].intake=startRequested?'explicit_start':assignmentProven?'live_assignment':'created';
       t = next.tasks[e.guid] = { id: e.guid, appId:e.appId, partnerId:e.partnerId, queuedTarget:e.partnerId?{kind:"bot",id:e.partnerId}:null, bindingId: this.uuid(), generation: 1, sequence: 0, reports: {}, state: "pending" };
     }
+    // A real new native run is distinct from retrying an attempted API write.
+    // Preserve the failed run in full; retire its binding only after Host settled.
+    if(t && startRequested && e.executionId && e.executionId!==t.feishuExecutionId &&
+      ['write_uncertain','write_failed','write_blocked'].includes(t.state) &&
+      !holdsPartner(t) && !t.result){
+      const history=[...(t.previousExecutions||[]),{...t,previousExecutions:undefined}];
+      t=next.tasks[e.guid]={id:t.id,appId:t.appId,partnerId:t.partnerId,queuedTarget:{kind:'bot',id:t.partnerId},
+        bindingId:this.uuid(),generation:t.generation+1,sequence:0,reports:{},state:'pending',previousExecutions:history};
+    }
+    if(t && startRequested && e.executionId && !t.dispatch){t.feishuExecutionId=e.executionId;t.feishuStartAt=e.eventAt;}
     if (t) { t.snapshot = snapshot;plan(t,snapshot,this.now()); }
     next.events[eventKey].pending = false;
     await this.save(next); return t ? clone(t) : null;
@@ -165,7 +189,7 @@ class Bridge {
     if (target?.kind !== "bot" || !target.id) fail("TARGET_INVALID");
     if(target.id!==this.partnerTarget(id).id)fail("CONNECTION_PARTNER_MISMATCH");
     if(t.queuedTarget && JSON.stringify(t.queuedTarget)!==JSON.stringify(target))fail("QUEUED_TARGET_FROZEN");
-    if (Object.values(this.state.tasks).some(x => (active.has(x.state)||x.orphanedDelivery) && x.dispatch?.target.id === target.id)) fail("TARGET_BUSY");
+    if (Object.values(this.state.tasks).some(x => holdsPartner(x) && x.dispatch?.target.id === target.id)) fail("TARGET_BUSY");
     await this.assertExecution();
     const resolved = await this.targets.resolve({ target });
     if (resolved.id !== target.id || resolved.kind !== "bot") fail("TARGET_UNAVAILABLE");
@@ -243,9 +267,24 @@ class Bridge {
       n.outbox.push({ id: this.uuid(), kind: "text", value: args.message + "\n验证范围：" + n.result.verification, state: "prepared" });
       for (const artifact of artifacts) n.outbox.push({ id: this.uuid(), kind: "file", value: artifact, taskGuid: t.id, state: "prepared" });
     }
-    n.outbox.push({ id: this.uuid(), kind: "progress", value: { message: args.message, status: kind === "progress" ? 2 : 3 }, state: "prepared" });
+    n.outbox.push({ id: this.uuid(), kind: "progress", value: { message: kind === "result" ? "结果已回报" : kind === "clarification" ? "等待补充信息" : args.message, status: kind === "progress" ? 2 : 3 }, state: "prepared" });
     if (kind === "result") n.outbox.push({ id: this.uuid(), kind: "complete", value: 4, state: "prepared" });
     await this.save(next); return this.writeRemaining(t.id);
+  }); }
+  async repairResultProgress(id) { return this.serial(async()=>{
+    const t=this.task(id),op=t.outbox?.find(x=>x.state==='attempted');
+    // Explicitly correct this known invalid payload; never reset uncertain
+    // transport writes, completed text or uploaded files for another attempt.
+    if(t.state!=='write_uncertain'||t.error!=='FEISHU_API_99992402'||
+      t.writeDiagnostic?.message!=='field validation failed'||!t.result||
+      op?.kind!=='progress'||op.value.message!==t.result.summary||op.value.message.length<=100)fail('PROGRESS_REPAIR_NOT_AVAILABLE');
+    const snap=await this.remote.get(id);
+    if(!snap.assigned||snap.done||snap.deleted||changed(t,snap))fail('SOURCE_REVOKED');
+    const n=clone(this.state),old=n.tasks[id].outbox.find(x=>x.id===op.id);
+    n.tasks[id].rejectedWrites||=[];n.tasks[id].rejectedWrites.push({...clone(old),diagnostic:n.tasks[id].writeDiagnostic,error:n.tasks[id].error});
+    old.id=this.uuid();old.value.message='结果已回报';old.state='prepared';
+    delete n.tasks[id].error;delete n.tasks[id].writeDiagnostic;await this.save(n);
+    return this.writeRemaining(id);
   }); }
   async reconcile(id) { return this.serial(async () => {
     const task = this.task(id);
@@ -263,8 +302,9 @@ class Bridge {
     if (!t.outbox.some(op => op.kind === "file" && op.value.id === args.artifactId)) fail("ARTIFACT_NOT_FOUND");
     return this.writeRemaining(t.id, { artifactId: args.artifactId, grant, callId });
   }); }
-  async blocked(id, code, state = "write_blocked") {
+  async blocked(id, code, state = "write_blocked", diagnostic) {
     const next = clone(this.state); next.tasks[id].state = state; next.tasks[id].error = code;
+    if(diagnostic)next.tasks[id].writeDiagnostic=clone(diagnostic);
     await this.save(next); return clone(next.tasks[id]);
   }
   async writeRemaining(id, delivery) {
@@ -287,7 +327,7 @@ class Bridge {
       await this.mark(id, i, "attempted", "writing");
       let receipt;
       try { receipt = op.kind === "file" ? await this.remote.upload(id, op.value, delivery.grant, delivery.callId) : await this.remote.write(id, op, snap); }
-      catch (e) { return this.blocked(id, e.code || "WRITE_OUTCOME_UNKNOWN", "write_uncertain"); }
+      catch (e) { return this.blocked(id, e.code || "WRITE_OUTCOME_UNKNOWN", "write_uncertain", e.diagnostic); }
       const saved = clone(this.state); saved.tasks[id].outbox[i].receipt = receipt || {}; await this.save(saved);
       op = this.task(id).outbox[i];
       let readback;
@@ -317,4 +357,4 @@ class Bridge {
     await this.save(next); return {receipt};
   }); }
 }
-module.exports = { Bridge, initial, fail };
+module.exports = { Bridge, initial, fail, holdsPartner };
