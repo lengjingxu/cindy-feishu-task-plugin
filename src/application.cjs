@@ -36,6 +36,8 @@ const errors = {
   ACTIVE_BINDINGS_FROZEN: "仍有在途任务，应用和凭据绑定已冻结。请先处理原任务。",
   ACCOUNT_HAS_TASK_HISTORY: "当前账本仍有关联应用的任务历史，暂不支持切换应用；请保留原配置。",
   PROVISION_OUTCOME_UNKNOWN: "注册或订阅结果未知，已禁止重复提交。需核实上次回执。",
+  RECEPTION_BASELINE_UNAVAILABLE: "接收基线缺失或不一致，未自动重建。请核对应用后手动开启接收。",
+  LISTENER_NOT_READY: "任务监听尚未连接；启动恢复未完成，请检查网络与应用连接。",
   CHECK_CONNECTION_FIRST: "请先检查应用认证，再开启接收。",
   ARTIFACT_NOT_READY: "文件尚未上传完成。",
   ARTIFACT_NOT_FOUND: "未找到该文件，请刷新任务。",
@@ -48,7 +50,11 @@ const journal=store;
 // The Node-held token reaches Host uploadDir over the private authenticated bridge.
 const uploads = new GrantedUpload(req => node('feishu/action', {action:'upload',appId:bridge.state.connection?.appId,request:req},req.callId), () => connectionAuthenticated);
 let hostServicesAvailable=false; let loading; let bridge; let onboarding; let appProfile; let channelBinding; let runner; let activity; let lease; let testMode=false; let testTimer; let receiving = false; let listenerState = "paused"; let listenerRun; let connectionAuthenticated = false; let draining=null;
-let queueTimer;
+let queueTimer,receivePromise,receptionEpoch=0,recoveryError=null;
+const recovery=new (require('./startup-recovery.cjs').StartupRecovery)(async current=>{
+  await ready();
+  if(current()&&bridge.state.connection?.receivingRequested)await receive(true);
+},e=>{recoveryError=e?error(e):null;channel.postMessage({type:'changed'});});
 function stopQueueTimer(){if(queueTimer!==undefined){clearTimeout(queueTimer);queueTimer=undefined;}}
 function armQueueTimer(){
   stopQueueTimer();
@@ -69,7 +75,13 @@ async function tick(){
   if(!receiving||testMode||!bridge)return;
   if(!draining){
     stopQueueTimer();
-    draining=bridge.drain(()=>receiving&&!testMode).then(()=>channel.postMessage({type:'changed'})).finally(()=>{draining=null;armQueueTimer();});
+    draining=(async()=>{
+      if(Object.values(bridge.state.tasks).some(t=>['pending','scheduled'].includes(t.state)&&t.queuedTarget)){
+        for(const t of Object.values(bridge.state.tasks))if(receiving&&['write_blocked','write_failed','write_uncertain'].includes(t.state)&&t.dispatch)
+          try{await bridge.inspectExecution(t.id);}catch(e){channel.postMessage({type:'error',error:error(e)});}
+      }
+      await bridge.drain(()=>receiving&&!testMode);
+    })().then(()=>channel.postMessage({type:'changed'})).finally(()=>{draining=null;armQueueTimer();});
   }
   return draining;
 }
@@ -77,7 +89,7 @@ async function node(method, params, callId) {
   canOperate(method);
   const r = await rawNode({ method, params: {...params,credentialKey:slot}, ...(callId?{callId,cancelWithCall:true}:{}),timeoutMs: method === "listener/run" ? 75000 : 30000 });
   if (!r.ok) throw Object.assign(new Error("Node 请求失败"), { code: r.errorCode === "PROTOCOL_ERROR" && /^[A-Z][A-Z0-9_]{1,80}$/.test(r.message || "") ? r.message : "NODE_" + (r.errorCode || "REQUEST_FAILED") });
-  if(r.result?.operationError)fail(r.result.operationError);
+  if(r.result?.operationError)throw Object.assign(Error(r.result.operationError),{code:r.result.operationError,diagnostic:r.result.diagnostic});
   return r.result;
 }
 async function ready() {
@@ -87,9 +99,9 @@ async function ready() {
     const b = new Bridge({ store: journal, targets: cindy.targets, uuid: () => crypto.randomUUID(), remote: {
       get: guid => node("feishu/action", { action: "get", guid, appId: b.state.connection?.appId }),
       write: (guid, operation) => node("feishu/action", { action: "write", guid, operation, appId: b.state.connection?.appId,
-        expectedTitle: b.task(guid).snapshot.title, expectedDescription: b.task(guid).snapshot.description }),
+        executionId:b.task(guid).feishuExecutionId,expectedTitle: b.task(guid).snapshot.title, expectedDescription: b.task(guid).snapshot.description }),
       prepareFile: (artifact, grant) => uploads.prepare(artifact, grant),
-      upload: (guid, artifact, grant, callId) => uploads.send(guid, artifact, grant, callId),
+      upload: (guid, artifact, grant, callId) => uploads.send(guid, artifact, grant, callId,b.task(guid).feishuExecutionId),
       matches: (snap, op) => op.kind === "file" ? fileMatches(snap, op) : op.kind === "text" ? snap.textDeliveries?.includes(op.value) :
         op.kind === "progress" ? snap.agentStatus === op.value.status && snap.agentProgress === op.value.message : snap.agentStatus === 4 && snap.done
     } });
@@ -120,17 +132,29 @@ async function ready() {
 function publicState() { return { tasks: Object.values(bridge.state.tasks).map(t => ({ ...t, ...(t.result ? { result: { ...t.result,
   artifacts: (t.result.artifacts || []).map(a => { let available = false; try { verifiedArtifact(t, a.id); available = true; } catch {} return { ...a, available }; }) } } : {}) })),
   connection: {appId:bridge.state.connection?.appId}, appProfile:bridge.state.appProfile, hostServicesAvailable, setupTask:bridge.state.setupTask, binding: channelBinding.state, onboarding: onboarding.state, testRun: bridge.state.testRun, receiving, listenerState, connectionAuthenticated,
+  receivingRequested:bridge.state.connection?.receivingRequested===true,recoveryError,
   limitation: "普通文件交付、安装后身份对齐与断线补收尚待验收。" }; }
-async function receive() {
+function receive(resuming=false) {
+  if(receivePromise)return receivePromise;
+  const epoch=receptionEpoch;
+  receivePromise=startReceiving(resuming,epoch).finally(()=>{receivePromise=null;});return receivePromise;
+}
+async function startReceiving(resuming,epoch) {
   if (receiving) return;
   const b = await ready(); onboarding.assertReady(); if (!connectionAuthenticated) fail("CHECK_CONNECTION_FIRST");
   await b.assertExecution();
-  const inventory=await node('feishu/action',{action:'assignment_baseline',appId:b.state.connection.appId});
-  await b.serial(async () => { const next = JSON.parse(JSON.stringify(b.state));
-    next.connection.baseline=inventory.at;next.connection.assignmentBaseline=inventory;next.connection.receivingRequested=true;await b.save(next); });
+  if(resuming){
+    const c=b.state.connection,inventory=c.assignmentBaseline;
+    if(!Number.isSafeInteger(c.baseline)||inventory?.appId!==c.appId||inventory.at!==c.baseline||!Array.isArray(inventory.assigned))fail('RECEPTION_BASELINE_UNAVAILABLE');
+  }else{
+    const inventory=await node('feishu/action',{action:'assignment_baseline',appId:b.state.connection.appId});
+    await b.serial(async () => {if(epoch!==receptionEpoch)return;const next = JSON.parse(JSON.stringify(b.state));
+      next.connection.baseline=inventory.at;next.connection.assignmentBaseline=inventory;next.connection.receivingRequested=true;await b.save(next); });
+  }
+  if(epoch!==receptionEpoch||!b.state.connection.receivingRequested)return;
   receiving = true; lease.start(b.state.connection.appId,b.state.connection.baseline,Infinity);
   listenerRun=lease.promise;
-  try{await lease.waitReady();await tick();}catch(e){receiving=false;stopQueueTimer();await lease.stop();listenerState="failed";throw e;}
+  try{await lease.waitReady();if(epoch!==receptionEpoch)return;recoveryError=null;await tick();}catch(e){receiving=false;stopQueueTimer();await lease.stop();listenerState="failed";throw e;}
 
 }
 async function ui(action, args = {}) {
@@ -196,7 +220,7 @@ async function ui(action, args = {}) {
   if (action === "test-connection") { if(receiving)fail("PAUSE_FIRST"); await runner.start(args.target); return publicState(); }
   if (action === "cancel-test") { await runner.cancel(); return publicState(); }
   if (action === "receive") { await receive(); return publicState(); }
-  if (action === "pause") {await b.serial(async()=>{const n=JSON.parse(JSON.stringify(b.state));n.connection.receivingRequested=false;await b.save(n);});receiving=false;stopQueueTimer();if(testMode)await runner.cancel();else await lease.stop();await draining; listenerState = "paused"; return publicState(); }
+  if (action === "pause") {receptionEpoch++;recovery.cancel();await b.serial(async()=>{const n=JSON.parse(JSON.stringify(b.state));n.connection.receivingRequested=false;await b.save(n);});receiving=false;stopQueueTimer();if(testMode)await runner.cancel();else await lease.stop();await receivePromise?.catch(()=>{});await draining;recoveryError=null; listenerState = "paused"; return publicState(); }
 
   if (action === "recover-task") {
     if(!receiving||testMode)fail("CHECK_CONNECTION_FIRST");
@@ -244,6 +268,8 @@ async function onMessage(msg) {
       result=r.result;await onboarding.authenticate(result.appId);connectionAuthenticated=true;await onboarding.inspect();
     }
     else if (msg.tool === "get_task") result = b.task(args.id);
+    else if (msg.tool === "inspect_source") {await b.inspect(args.id);result=b.task(args.id);}
+    else if (msg.tool === "repair_result_progress") result=await b.repairResultProgress(args.id);
     else if (msg.tool === "inspect_delivery") result = await b.inspectExecution(args.id);
     else if(msg.tool==='get_source_attachment'){
       const t=Object.values(b.state.tasks).find(t=>t.bindingId===args.bindingId);
@@ -262,13 +288,13 @@ async function onMessage(msg) {
   } catch (e) { const err = error(e); await cindy.send({ type: "tool-result", callId: msg.callId, ok: false, errorCode: err.code, message: err.message }); }
  }
 return {id,slot,ready,ui,onMessage,publicState,
- async resume(){await ready();if(bridge.state.connection?.receivingRequested)await receive();},
+ resume(){return recovery.start();},
  async refreshProfile(){if(connectionAuthenticated)await appProfile.refresh();},
  get bridge(){return bridge},
  async prepareRemoval(){
   await ready();
   if(testMode)fail('TEST_ALREADY_ACTIVE');
-  const wasReceiving=receiving;receiving=false;stopQueueTimer();if(wasReceiving)await lease.stop();await draining;listenerState='paused';
+  receptionEpoch++;recovery.cancel();const wasReceiving=receiving;receiving=false;stopQueueTimer();if(wasReceiving||receivePromise)await lease.stop();await receivePromise?.catch(()=>{});await draining;listenerState='paused';
   await bridge.serial(async()=>{const n=JSON.parse(JSON.stringify(bridge.state));if(n.connection)n.connection.receivingRequested=false;await bridge.save(n);});
   await bridge.tail;
   if(onboarding.hasBindings()||Object.values(bridge.state.tasks).some(t=>!['done','stopped'].includes(t.state))||

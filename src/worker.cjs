@@ -59,7 +59,8 @@ input.on("line", async line => {
   try { reply({ jsonrpc: "2.0", id: request.id, result: await handle(request) }); }
   catch (e) {
     const code = /^[A-Z][A-Z0-9_]{1,80}$/.test(e.code || "") ? e.code : "WORKER_OPERATION_FAILED";
-    reply({ jsonrpc: "2.0", id: request.id, error: { code: code === "METHOD_NOT_FOUND" ? -32601 : -32000, message: code } });
+    if(e.taskDiagnostic)reply({jsonrpc:"2.0",id:request.id,result:{operationError:code,diagnostic:e.taskDiagnostic}});
+    else reply({ jsonrpc: "2.0", id: request.id, error: { code: code === "METHOD_NOT_FOUND" ? -32601 : -32000, message: code } });
   } finally { if (request.cindy?.secrets) { for(const key of slots)delete request.cindy.secrets[key]; } }
 });
 input.on("close", () => {for(const control of authorizationControls.values())control.abort();for(const listener of listeners.values())listener.stop();});

@@ -5,7 +5,7 @@ test('main通过Host恢复身份，未认证状态不接单，UI不能伪造任�
  const files=new Map(),replies=[],toolReplies=[];let receiver,channel,nodeCalls=[],resolves=0;
  class Channel{constructor(){channel=this}postMessage(v){replies.push(v)}}
  const cindy={fs:async r=>{if(r.op==='read')return files.has(r.path)?{ok:true,content:files.get(r.path)}:{ok:false,errorCode:'NOT_FOUND'};files.set(r.path,r.content);return{ok:true}},targets:{list:async()=>({targets:[]}),resolve:async p=>{resolves++;return p.target},send:async()=>assert.fail('no sends')},node:{request:async r=>{nodeCalls.push(r);return r.method==='binding/restore'?{ok:true,result:{saved:false}}:{ok:false,errorCode:'CONNECTION_REQUIRED'}}},onHostMessage:fn=>{receiver=fn},send:async r=>{toolReplies.push(r)}};
- vm.runInNewContext(fs.readFileSync('plugin/main.js','utf8'),{cindy,BroadcastChannel:Channel,crypto:webcrypto,TextEncoder,Uint8Array,console});
+ vm.runInNewContext(fs.readFileSync('plugin/main.js','utf8'),{cindy,BroadcastChannel:Channel,crypto:webcrypto,TextEncoder,Uint8Array,console,setTimeout:()=>0,clearTimeout(){}});
  await channel.onmessage({data:{type:'request',reqId:'state',action:'state'}});assert.equal(replies.at(-1).ok,true);assert.equal(replies.at(-1).result.connectionAuthenticated,false);assert.equal(nodeCalls[0].method,'binding/restore');
  const req={data:{type:'request',reqId:'same',action:'select-partner',args:{target:{kind:'bot',id:'selected'}}}};await Promise.all([channel.onmessage(req),channel.onmessage(req)]);assert.equal(resolves,1);assert.equal(replies.at(-1).result.binding.state,'unbound');assert.equal(replies.at(-1).result.binding.candidate.id,'selected');
  await channel.onmessage({data:{type:'request',reqId:'receive',action:'receive'}});assert.equal(replies.at(-1).ok,false);assert(!nodeCalls.some(r=>r.method==='listener/run'));
@@ -17,7 +17,7 @@ test('Host恢复失败后下次重试重新初始化，不暴露半初始化成�
  const files=new Map(),replies=[];let channel,calls=0;
  class Channel{constructor(){channel=this}postMessage(v){replies.push(v)}}
  const cindy={fs:async r=>{if(r.op==='read')return files.has(r.path)?{ok:true,content:files.get(r.path)}:{ok:false,errorCode:'NOT_FOUND'};files.set(r.path,r.content);return{ok:true}},targets:{list:async()=>({targets:[]})},node:{request:async()=>++calls===1?{ok:false,errorCode:'TEMPORARY'}:{ok:true,result:{saved:false}}},onHostMessage(){}};
- vm.runInNewContext(fs.readFileSync('plugin/main.js','utf8'),{cindy,BroadcastChannel:Channel,crypto:webcrypto,TextEncoder,Uint8Array,console});
+ vm.runInNewContext(fs.readFileSync('plugin/main.js','utf8'),{cindy,BroadcastChannel:Channel,crypto:webcrypto,TextEncoder,Uint8Array,console,setTimeout:()=>0,clearTimeout(){}});
  for(const reqId of ['first','second'])await channel.onmessage({data:{type:'request',reqId,action:'state'}});
  assert.equal(replies[0].ok,false);assert.equal(replies[1].ok,true);assert.equal(calls,3);
 });
@@ -25,7 +25,7 @@ test('设置页绑定前置检查不创建或发送聊天任务',async()=>{
  const files=new Map(),replies=[];let channel,creates=0,sends=0;
  class Channel{constructor(){channel=this}postMessage(v){replies.push(v)}}
  const cindy={fs:async r=>{if(r.op==='read')return files.has(r.path)?{ok:true,content:files.get(r.path)}:{ok:false,errorCode:'NOT_FOUND'};files.set(r.path,r.content);return{ok:true}},targets:{list:async()=>({targets:[]})},node:{request:async()=>({ok:true,result:{saved:false,hostServices:true}})},tasks:{create:async r=>{creates++;assert.equal(r.title,'绑定飞书应用');return{taskId:'setup',revision:1}},send:async r=>{sends++;assert.equal(r.taskId,'setup');assert(r.text.includes('bind_application'));return{runId:'setup-run'}}},onHostMessage(){}};
- vm.runInNewContext(fs.readFileSync('plugin/main.js','utf8'),{cindy,BroadcastChannel:Channel,crypto:webcrypto,TextEncoder,Uint8Array,console});
+ vm.runInNewContext(fs.readFileSync('plugin/main.js','utf8'),{cindy,BroadcastChannel:Channel,crypto:webcrypto,TextEncoder,Uint8Array,console,setTimeout:()=>0,clearTimeout(){}});
  await Promise.all(['a','b'].map(reqId=>channel.onmessage({data:{type:'request',reqId,action:'begin-binding'}})));assert.equal(creates,0);assert.equal(sends,0);assert.equal(replies.filter(r=>r.reqId).length,2);assert(replies.filter(r=>r.reqId).every(r=>r.ok));
 });
 
@@ -130,7 +130,7 @@ test('支持检查直接走无凭据Node方法，不冒充完整工作流已验�
  const replies=[],calls=[];let receiver;
  class Channel{postMessage(){}}
  const cindy={fs:async()=>({ok:false,errorCode:'NOT_FOUND'}),targets:{list(){throw Error('must not list targets')}},node:{request:async r=>{calls.push(r);assert.equal(r.method,'runtime/capabilities');return{ok:true,result:{version:1,authorization:true,hostServicesEntry:false,childSpawn:true}};}},onHostMessage:fn=>{receiver=fn},send:async r=>replies.push(r)};
- vm.runInNewContext(fs.readFileSync('plugin/main.js','utf8'),{cindy,BroadcastChannel:Channel,crypto:webcrypto,TextEncoder,Uint8Array,console});
+ vm.runInNewContext(fs.readFileSync('plugin/main.js','utf8'),{cindy,BroadcastChannel:Channel,crypto:webcrypto,TextEncoder,Uint8Array,console,setTimeout:()=>0,clearTimeout(){}});
  await receiver({type:'tool-call',tool:'inspect_host_support',callId:'inspect',args:{}});
  assert.equal(calls.length,1);assert.equal(replies[0].ok,true);assert.equal(replies[0].result.scopedDelegationProbe,false);assert.equal(replies[0].result.fullWorkflowVerified,false);assert.equal(replies[0].result.node.hostServicesEntry,false);
 });

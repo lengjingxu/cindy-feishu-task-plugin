@@ -4,7 +4,7 @@
   "name": "飞书任务",
   "description": "将飞书任务交给关联的 Cindy 伙伴执行，回报进度、结果和文件；支持最多四个应用连接。当前仅支持 macOS。",
   "whenToUse": "连接飞书任务应用、查看任务看板，或由原关联伙伴向飞书任务回报进度、结果和真实文件。",
-  "version": "0.15.15",
+  "version": "0.15.17",
   "kind": "chip",
   "entry": "main.js",
   "icon": "assets/icon.png",
@@ -36,6 +36,46 @@
     {
       "name": "get_task",
       "description": "读取插件已接管任务，不读取伙伴对话历史。",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "applicationId": {
+            "type": "string",
+            "description": "应用连接ID，来自list_inbox或应用设置。多应用同名任务时必须提供。"
+          }
+        },
+        "required": [
+          "id"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "inspect_source",
+      "description": "只读刷新已接管任务的飞书源信息，保留原任务执行和回写状态，不重发任务或写入。",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "applicationId": {
+            "type": "string",
+            "description": "应用连接ID，来自list_inbox或应用设置。多应用同名任务时必须提供。"
+          }
+        },
+        "required": [
+          "id"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "repair_result_progress",
+      "description": "修正已明确被飞书99992402拒绝的旧版超长结果进度，保留完整结果与失败证据；仅适用已保存结果、正文已回报而最终进度字段失败的任务。不重发未知写入、文件或伙伴任务。",
       "parameters": {
         "type": "object",
         "properties": {

@@ -13,7 +13,7 @@ class Activity {
   const save=async value=>{const n=JSON.parse(JSON.stringify(this.b.state));n.tasks[t.id].activities||={};n.tasks[t.id].activities[args.sequence]=value;n.tasks[t.id].activitySequence=Math.max(args.sequence,n.tasks[t.id].activitySequence||0);await this.b.save(n);op=value;};
   if(op&&['verified','accepted_unverified'].includes(op.state))return op;
   const snap=await this.b.remote.get(t.id);if(!snap.assigned||snap.done||snap.deleted||snap.title!==t.snapshot.title||snap.description!==t.snapshot.description)fail('SOURCE_REVOKED');
-  const call=(action,extra)=>this.node('feishu/action',{action,guid:t.id,appId:this.b.state.connection.appId,...extra});
+  const call=(action,extra)=>this.node('feishu/action',{action,guid:t.id,executionId:t.feishuExecutionId,appId:this.b.state.connection.appId,...extra});
   if(!op){await save({kind:args.kind,message:args.message,signature,key:this.b.uuid(),timestamp:Math.floor(Date.now()/1000),state:'attempted'});
    try{const receipt=await call('activity_write',{operation:op,expectedTitle:snap.title,expectedDescription:snap.description});await save({...op,receipt,state:args.kind==='step'?'accepted_unverified':'attempted'});}catch(e){await save({...op,error:e.code||'ACTIVITY_OUTCOME_UNKNOWN'});return op;}
   }

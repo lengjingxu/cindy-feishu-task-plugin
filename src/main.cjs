@@ -2,7 +2,7 @@
 const {Journal}=require('./journal.cjs');
 const {Applications}=require('./applications.cjs');
 const {createApplication,error}=require('./application.cjs');
-const {fail}=require('./core.cjs');
+const {fail,holdsPartner}=require('./core.cjs');
 const channel=new BroadcastChannel('feishu-task-bridge-v1');
 const journal=new Journal(req=>cindy.fs(req),async text=>Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256',new TextEncoder().encode(text))),b=>b.toString(16).padStart(2,'0')).join(''));
 const apps=new Applications(journal,()=>crypto.randomUUID());
@@ -13,7 +13,7 @@ function runtime(id){
  if(!runtimes.has(id))runtimes.set(id,createApplication({id,slot:a.slot,store:apps.store(id),channel,
   dispatchGate:(target,send)=>{
    const p=dispatchTail.then(()=>{
-    if(apps.entries().some(other=>other.id!==id&&Object.values(other.state.tasks).some(t=>t.dispatch?.target?.id===target.id&&(t.orphanedDelivery||!['done','stopped'].includes(t.state)))))fail('TARGET_BUSY');
+    if(apps.entries().some(other=>other.id!==id&&Object.values(other.state.tasks).some(t=>t.dispatch?.target?.id===target.id&&holdsPartner(t))))fail('TARGET_BUSY');
     return send();
    });dispatchTail=p.catch(()=>{});return p;
   },
@@ -135,8 +135,10 @@ cindy.onHostMessage(async msg=>{
  }catch(e){const err=error(e);if(msg.type==='tool-call')await cindy.send({type:'tool-result',callId:msg.callId,ok:false,errorCode:err.code,message:err.message});else channel.postMessage({type:'error',error:err});}
 });
 // Resume only the user's persisted reception choice. Paused apps stay paused.
-ready().then(async()=>{
+const startupRecovery=new (require('./startup-recovery.cjs').StartupRecovery)(async()=>{
+ await ready();
  for(const a of apps.entries())if(a.status==='active'&&a.state.connection?.receivingRequested){
-  try{await runtime(a.id).resume();}catch(e){channel.postMessage({type:'error',error:error(e)});}
+  await runtime(a.id).resume();
  }
-}).catch(e=>channel.postMessage({type:'error',error:error(e)}));
+},e=>{if(e)channel.postMessage({type:'error',error:error(e)});});
+startupRecovery.start();

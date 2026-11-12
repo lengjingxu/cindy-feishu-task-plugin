@@ -71,12 +71,12 @@
           grantFor(artifact, grant);
           if (!this.authenticated()) fail("HOST_UPLOAD_AUTH_UNAVAILABLE");
         }
-        async send(taskGuid, artifact, grant, callId) {
+        async send(taskGuid, artifact, grant, callId, executionId) {
           this.prepare(artifact, grant);
           const response = await this.fetch({
             url: "https://open.feishu.cn/open-apis/task/v2/attachments/upload",
             method: "POST",
-            uploadDir: { ...grantFor(artifact, grant), fields: { resource_type: "task_delivery", resource_id: taskGuid } },
+            uploadDir: { ...grantFor(artifact, grant), fields: { resource_type: "task_delivery", resource_id: taskGuid, ...executionId ? { execution_id: executionId } : {} } },
             callId
           });
           if (!response.ok || response.status < 200 || response.status >= 300 || response.truncated) fail("FILE_UPLOAD_UNCERTAIN");
@@ -124,6 +124,12 @@
         throw Object.assign(new Error(code), { code });
       }
       var active = /* @__PURE__ */ new Set(["dispatching", "uncertain", "delivered", "running", "review", "needs_input", "write_blocked", "writing", "write_uncertain", "write_failed", "cancel_check"]);
+      function holdsPartner(t) {
+        if (!active.has(t.state) && !t.orphanedDelivery) return false;
+        const r = t.executionReceipt, d = t.dispatch;
+        const finishedWrite = ["write_blocked", "write_failed", "write_uncertain"].includes(t.state) && !t.orphanedDelivery && r?.found === true && r.settled === true && r.status === "accepted" && r.result?.outcome === "completed" && d && r.requestKey === d.requestKey && r.target?.kind === d.target.kind && r.target?.id === d.target.id && r.taskId === t.targetTaskId && typeof r.executionId === "string" && r.executionId.startsWith("plugin-target:") && r.executionId === t.receipt?.executionId;
+        return !finishedWrite;
+      }
       var changed = (t, snapshot) => Boolean(t.dispatch && (t.snapshot.title !== snapshot.title || t.snapshot.description !== snapshot.description || !snapshot.done && t.snapshot.contextVersion && snapshot.contextVersion && !snapshot.contextErrors?.length && contextKey(t.snapshot) !== contextKey(snapshot)));
       function plan(t, snapshot, now) {
         if (t.dispatch) return;
@@ -209,7 +215,7 @@
             const priorUnassigned = prior?.assigned === false && prior.observedAt >= e.baseline && prior.observedAt < e.eventAt;
             const inventoryProven = baseline?.appId === e.appId && baseline.at === e.baseline && Array.isArray(baseline.assigned) && !baseline.assigned.includes(e.guid);
             const assignmentProven = afterEnable && (priorUnassigned || inventoryProven);
-            const startRequested = e.agentStartRequested === true && freshEvent && snapshot.soleAppAssignee === true && snapshot.agentStatus === 1;
+            const startRequested = e.agentStartRequested === true && freshEvent && (!prior || !Number.isSafeInteger(prior.eventAt) || e.eventAt > prior.eventAt) && !t?.previousExecutions?.some((old) => old.feishuExecutionId && old.feishuExecutionId === e.executionId) && snapshot.soleAppAssignee === true && snapshot.agentStatus === 1;
             next.assignmentObservations ||= {};
             if (!prior || !Number.isSafeInteger(e.eventAt) || e.eventAt >= (prior.eventAt || 0))
               next.assignmentObservations[observationKey] = { assigned: snapshot.assigned === true, observedAt, eventAt: e.eventAt || 0 };
@@ -217,6 +223,25 @@
             if (!t && (e.isCreate && Number.isFinite(e.baseline) && snapshot.createdAt >= e.baseline || assignmentProven || startRequested) && snapshot.assigned && !snapshot.done && !snapshot.deleted) {
               next.events[eventKey].intake = startRequested ? "explicit_start" : assignmentProven ? "live_assignment" : "created";
               t = next.tasks[e.guid] = { id: e.guid, appId: e.appId, partnerId: e.partnerId, queuedTarget: e.partnerId ? { kind: "bot", id: e.partnerId } : null, bindingId: this.uuid(), generation: 1, sequence: 0, reports: {}, state: "pending" };
+            }
+            if (t && startRequested && e.executionId && e.executionId !== t.feishuExecutionId && ["write_uncertain", "write_failed", "write_blocked"].includes(t.state) && !holdsPartner(t) && !t.result) {
+              const history = [...t.previousExecutions || [], { ...t, previousExecutions: void 0 }];
+              t = next.tasks[e.guid] = {
+                id: t.id,
+                appId: t.appId,
+                partnerId: t.partnerId,
+                queuedTarget: { kind: "bot", id: t.partnerId },
+                bindingId: this.uuid(),
+                generation: t.generation + 1,
+                sequence: 0,
+                reports: {},
+                state: "pending",
+                previousExecutions: history
+              };
+            }
+            if (t && startRequested && e.executionId && !t.dispatch) {
+              t.feishuExecutionId = e.executionId;
+              t.feishuStartAt = e.eventAt;
             }
             if (t) {
               t.snapshot = snapshot;
@@ -332,7 +357,7 @@
             if (target?.kind !== "bot" || !target.id) fail("TARGET_INVALID");
             if (target.id !== this.partnerTarget(id).id) fail("CONNECTION_PARTNER_MISMATCH");
             if (t.queuedTarget && JSON.stringify(t.queuedTarget) !== JSON.stringify(target)) fail("QUEUED_TARGET_FROZEN");
-            if (Object.values(this.state.tasks).some((x) => (active.has(x.state) || x.orphanedDelivery) && x.dispatch?.target.id === target.id)) fail("TARGET_BUSY");
+            if (Object.values(this.state.tasks).some((x) => holdsPartner(x) && x.dispatch?.target.id === target.id)) fail("TARGET_BUSY");
             await this.assertExecution();
             const resolved = await this.targets.resolve({ target });
             if (resolved.id !== target.id || resolved.kind !== "bot") fail("TARGET_UNAVAILABLE");
@@ -475,10 +500,28 @@
               n.outbox.push({ id: this.uuid(), kind: "text", value: args.message + "\n\u9A8C\u8BC1\u8303\u56F4\uFF1A" + n.result.verification, state: "prepared" });
               for (const artifact of artifacts) n.outbox.push({ id: this.uuid(), kind: "file", value: artifact, taskGuid: t.id, state: "prepared" });
             }
-            n.outbox.push({ id: this.uuid(), kind: "progress", value: { message: args.message, status: kind === "progress" ? 2 : 3 }, state: "prepared" });
+            n.outbox.push({ id: this.uuid(), kind: "progress", value: { message: kind === "result" ? "\u7ED3\u679C\u5DF2\u56DE\u62A5" : kind === "clarification" ? "\u7B49\u5F85\u8865\u5145\u4FE1\u606F" : args.message, status: kind === "progress" ? 2 : 3 }, state: "prepared" });
             if (kind === "result") n.outbox.push({ id: this.uuid(), kind: "complete", value: 4, state: "prepared" });
             await this.save(next);
             return this.writeRemaining(t.id);
+          });
+        }
+        async repairResultProgress(id) {
+          return this.serial(async () => {
+            const t = this.task(id), op = t.outbox?.find((x) => x.state === "attempted");
+            if (t.state !== "write_uncertain" || t.error !== "FEISHU_API_99992402" || t.writeDiagnostic?.message !== "field validation failed" || !t.result || op?.kind !== "progress" || op.value.message !== t.result.summary || op.value.message.length <= 100) fail("PROGRESS_REPAIR_NOT_AVAILABLE");
+            const snap = await this.remote.get(id);
+            if (!snap.assigned || snap.done || snap.deleted || changed(t, snap)) fail("SOURCE_REVOKED");
+            const n = clone(this.state), old = n.tasks[id].outbox.find((x) => x.id === op.id);
+            n.tasks[id].rejectedWrites ||= [];
+            n.tasks[id].rejectedWrites.push({ ...clone(old), diagnostic: n.tasks[id].writeDiagnostic, error: n.tasks[id].error });
+            old.id = this.uuid();
+            old.value.message = "\u7ED3\u679C\u5DF2\u56DE\u62A5";
+            old.state = "prepared";
+            delete n.tasks[id].error;
+            delete n.tasks[id].writeDiagnostic;
+            await this.save(n);
+            return this.writeRemaining(id);
           });
         }
         async reconcile(id) {
@@ -500,10 +543,11 @@
             return this.writeRemaining(t.id, { artifactId: args.artifactId, grant, callId });
           });
         }
-        async blocked(id, code, state = "write_blocked") {
+        async blocked(id, code, state = "write_blocked", diagnostic) {
           const next = clone(this.state);
           next.tasks[id].state = state;
           next.tasks[id].error = code;
+          if (diagnostic) next.tasks[id].writeDiagnostic = clone(diagnostic);
           await this.save(next);
           return clone(next.tasks[id]);
         }
@@ -545,7 +589,7 @@
             try {
               receipt = op.kind === "file" ? await this.remote.upload(id, op.value, delivery.grant, delivery.callId) : await this.remote.write(id, op, snap);
             } catch (e) {
-              return this.blocked(id, e.code || "WRITE_OUTCOME_UNKNOWN", "write_uncertain");
+              return this.blocked(id, e.code || "WRITE_OUTCOME_UNKNOWN", "write_uncertain", e.diagnostic);
             }
             const saved = clone(this.state);
             saved.tasks[id].outbox[i].receipt = receipt || {};
@@ -599,7 +643,7 @@
           });
         }
       };
-      module.exports = { Bridge, initial, fail };
+      module.exports = { Bridge, initial, fail, holdsPartner };
     }
   });
 
@@ -1032,7 +1076,7 @@
             if (op && ["verified", "accepted_unverified"].includes(op.state)) return op;
             const snap = await this.b.remote.get(t.id);
             if (!snap.assigned || snap.done || snap.deleted || snap.title !== t.snapshot.title || snap.description !== t.snapshot.description) fail("SOURCE_REVOKED");
-            const call = (action, extra) => this.node("feishu/action", { action, guid: t.id, appId: this.b.state.connection.appId, ...extra });
+            const call = (action, extra) => this.node("feishu/action", { action, guid: t.id, executionId: t.feishuExecutionId, appId: this.b.state.connection.appId, ...extra });
             if (!op) {
               await save({ kind: args.kind, message: args.message, signature, key: this.b.uuid(), timestamp: Math.floor(Date.now() / 1e3), state: "attempted" });
               try {
@@ -1413,6 +1457,60 @@
     }
   });
 
+  // src/startup-recovery.cjs
+  var require_startup_recovery = __commonJS({
+    "src/startup-recovery.cjs"(exports, module) {
+      "use strict";
+      var StartupRecovery = class {
+        constructor(run, report, timers = {
+          setTimeout: (...args) => setTimeout(...args),
+          clearTimeout: (id) => clearTimeout(id)
+        }) {
+          this.run = run;
+          this.report = report;
+          this.timers = timers;
+          this.epoch = 0;
+          this.attempt = 0;
+        }
+        start() {
+          if (this.pending) return this.pending;
+          if (this.timer !== void 0 || this.complete || this.attempt >= 3) return Promise.resolve();
+          const epoch = this.epoch;
+          this.attempt++;
+          this.pending = Promise.resolve().then(async () => {
+            try {
+              if (epoch !== this.epoch) return;
+              await this.run(() => epoch === this.epoch);
+              if (epoch === this.epoch) {
+                this.complete = true;
+                this.report(null);
+              }
+            } catch (error) {
+              if (epoch !== this.epoch) return;
+              this.report(error);
+              if (this.attempt < 3) {
+                this.timer = this.timers.setTimeout(() => {
+                  this.timer = void 0;
+                  this.start();
+                }, this.attempt * 2e3);
+              }
+            } finally {
+              this.pending = null;
+            }
+          });
+          return this.pending;
+        }
+        cancel() {
+          this.epoch++;
+          this.complete = true;
+          if (this.timer !== void 0) this.timers.clearTimeout(this.timer);
+          this.timer = void 0;
+        }
+      };
+      module.exports = { StartupRecovery };
+    }
+  });
+
   // src/application.cjs
   var require_application = __commonJS({
     "src/application.cjs"(exports, module) {
@@ -1453,6 +1551,8 @@
         ACTIVE_BINDINGS_FROZEN: "\u4ECD\u6709\u5728\u9014\u4EFB\u52A1\uFF0C\u5E94\u7528\u548C\u51ED\u636E\u7ED1\u5B9A\u5DF2\u51BB\u7ED3\u3002\u8BF7\u5148\u5904\u7406\u539F\u4EFB\u52A1\u3002",
         ACCOUNT_HAS_TASK_HISTORY: "\u5F53\u524D\u8D26\u672C\u4ECD\u6709\u5173\u8054\u5E94\u7528\u7684\u4EFB\u52A1\u5386\u53F2\uFF0C\u6682\u4E0D\u652F\u6301\u5207\u6362\u5E94\u7528\uFF1B\u8BF7\u4FDD\u7559\u539F\u914D\u7F6E\u3002",
         PROVISION_OUTCOME_UNKNOWN: "\u6CE8\u518C\u6216\u8BA2\u9605\u7ED3\u679C\u672A\u77E5\uFF0C\u5DF2\u7981\u6B62\u91CD\u590D\u63D0\u4EA4\u3002\u9700\u6838\u5B9E\u4E0A\u6B21\u56DE\u6267\u3002",
+        RECEPTION_BASELINE_UNAVAILABLE: "\u63A5\u6536\u57FA\u7EBF\u7F3A\u5931\u6216\u4E0D\u4E00\u81F4\uFF0C\u672A\u81EA\u52A8\u91CD\u5EFA\u3002\u8BF7\u6838\u5BF9\u5E94\u7528\u540E\u624B\u52A8\u5F00\u542F\u63A5\u6536\u3002",
+        LISTENER_NOT_READY: "\u4EFB\u52A1\u76D1\u542C\u5C1A\u672A\u8FDE\u63A5\uFF1B\u542F\u52A8\u6062\u590D\u672A\u5B8C\u6210\uFF0C\u8BF7\u68C0\u67E5\u7F51\u7EDC\u4E0E\u5E94\u7528\u8FDE\u63A5\u3002",
         CHECK_CONNECTION_FIRST: "\u8BF7\u5148\u68C0\u67E5\u5E94\u7528\u8BA4\u8BC1\uFF0C\u518D\u5F00\u542F\u63A5\u6536\u3002",
         ARTIFACT_NOT_READY: "\u6587\u4EF6\u5C1A\u672A\u4E0A\u4F20\u5B8C\u6210\u3002",
         ARTIFACT_NOT_FOUND: "\u672A\u627E\u5230\u8BE5\u6587\u4EF6\uFF0C\u8BF7\u5237\u65B0\u4EFB\u52A1\u3002",
@@ -1483,7 +1583,14 @@
         let listenerRun;
         let connectionAuthenticated = false;
         let draining = null;
-        let queueTimer;
+        let queueTimer, receivePromise, receptionEpoch = 0, recoveryError = null;
+        const recovery = new (require_startup_recovery()).StartupRecovery(async (current) => {
+          await ready();
+          if (current() && bridge.state.connection?.receivingRequested) await receive(true);
+        }, (e) => {
+          recoveryError = e ? error(e) : null;
+          channel.postMessage({ type: "changed" });
+        });
         function stopQueueTimer() {
           if (queueTimer !== void 0) {
             clearTimeout(queueTimer);
@@ -1511,7 +1618,17 @@
           if (!receiving || testMode || !bridge) return;
           if (!draining) {
             stopQueueTimer();
-            draining = bridge.drain(() => receiving && !testMode).then(() => channel.postMessage({ type: "changed" })).finally(() => {
+            draining = (async () => {
+              if (Object.values(bridge.state.tasks).some((t) => ["pending", "scheduled"].includes(t.state) && t.queuedTarget)) {
+                for (const t of Object.values(bridge.state.tasks)) if (receiving && ["write_blocked", "write_failed", "write_uncertain"].includes(t.state) && t.dispatch)
+                  try {
+                    await bridge.inspectExecution(t.id);
+                  } catch (e) {
+                    channel.postMessage({ type: "error", error: error(e) });
+                  }
+              }
+              await bridge.drain(() => receiving && !testMode);
+            })().then(() => channel.postMessage({ type: "changed" })).finally(() => {
               draining = null;
               armQueueTimer();
             });
@@ -1522,7 +1639,7 @@
           canOperate(method);
           const r = await rawNode({ method, params: { ...params, credentialKey: slot }, ...callId ? { callId, cancelWithCall: true } : {}, timeoutMs: method === "listener/run" ? 75e3 : 3e4 });
           if (!r.ok) throw Object.assign(new Error("Node \u8BF7\u6C42\u5931\u8D25"), { code: r.errorCode === "PROTOCOL_ERROR" && /^[A-Z][A-Z0-9_]{1,80}$/.test(r.message || "") ? r.message : "NODE_" + (r.errorCode || "REQUEST_FAILED") });
-          if (r.result?.operationError) fail(r.result.operationError);
+          if (r.result?.operationError) throw Object.assign(Error(r.result.operationError), { code: r.result.operationError, diagnostic: r.result.diagnostic });
           return r.result;
         }
         async function ready() {
@@ -1536,11 +1653,12 @@
                 guid,
                 operation,
                 appId: b.state.connection?.appId,
+                executionId: b.task(guid).feishuExecutionId,
                 expectedTitle: b.task(guid).snapshot.title,
                 expectedDescription: b.task(guid).snapshot.description
               }),
               prepareFile: (artifact, grant) => uploads.prepare(artifact, grant),
-              upload: (guid, artifact, grant, callId) => uploads.send(guid, artifact, grant, callId),
+              upload: (guid, artifact, grant, callId) => uploads.send(guid, artifact, grant, callId, b.task(guid).feishuExecutionId),
               matches: (snap, op) => op.kind === "file" ? fileMatches(snap, op) : op.kind === "text" ? snap.textDeliveries?.includes(op.value) : op.kind === "progress" ? snap.agentStatus === op.value.status && snap.agentProgress === op.value.message : snap.agentStatus === 4 && snap.done
             } });
             const dispatch = b.dispatch.bind(b);
@@ -1624,28 +1742,47 @@
             receiving,
             listenerState,
             connectionAuthenticated,
+            receivingRequested: bridge.state.connection?.receivingRequested === true,
+            recoveryError,
             limitation: "\u666E\u901A\u6587\u4EF6\u4EA4\u4ED8\u3001\u5B89\u88C5\u540E\u8EAB\u4EFD\u5BF9\u9F50\u4E0E\u65AD\u7EBF\u8865\u6536\u5C1A\u5F85\u9A8C\u6536\u3002"
           };
         }
-        async function receive() {
+        function receive(resuming = false) {
+          if (receivePromise) return receivePromise;
+          const epoch = receptionEpoch;
+          receivePromise = startReceiving(resuming, epoch).finally(() => {
+            receivePromise = null;
+          });
+          return receivePromise;
+        }
+        async function startReceiving(resuming, epoch) {
           if (receiving) return;
           const b = await ready();
           onboarding.assertReady();
           if (!connectionAuthenticated) fail("CHECK_CONNECTION_FIRST");
           await b.assertExecution();
-          const inventory = await node("feishu/action", { action: "assignment_baseline", appId: b.state.connection.appId });
-          await b.serial(async () => {
-            const next = JSON.parse(JSON.stringify(b.state));
-            next.connection.baseline = inventory.at;
-            next.connection.assignmentBaseline = inventory;
-            next.connection.receivingRequested = true;
-            await b.save(next);
-          });
+          if (resuming) {
+            const c = b.state.connection, inventory = c.assignmentBaseline;
+            if (!Number.isSafeInteger(c.baseline) || inventory?.appId !== c.appId || inventory.at !== c.baseline || !Array.isArray(inventory.assigned)) fail("RECEPTION_BASELINE_UNAVAILABLE");
+          } else {
+            const inventory = await node("feishu/action", { action: "assignment_baseline", appId: b.state.connection.appId });
+            await b.serial(async () => {
+              if (epoch !== receptionEpoch) return;
+              const next = JSON.parse(JSON.stringify(b.state));
+              next.connection.baseline = inventory.at;
+              next.connection.assignmentBaseline = inventory;
+              next.connection.receivingRequested = true;
+              await b.save(next);
+            });
+          }
+          if (epoch !== receptionEpoch || !b.state.connection.receivingRequested) return;
           receiving = true;
           lease.start(b.state.connection.appId, b.state.connection.baseline, Infinity);
           listenerRun = lease.promise;
           try {
             await lease.waitReady();
+            if (epoch !== receptionEpoch) return;
+            recoveryError = null;
             await tick();
           } catch (e) {
             receiving = false;
@@ -1763,6 +1900,8 @@
             return publicState();
           }
           if (action === "pause") {
+            receptionEpoch++;
+            recovery.cancel();
             await b.serial(async () => {
               const n = JSON.parse(JSON.stringify(b.state));
               n.connection.receivingRequested = false;
@@ -1772,7 +1911,10 @@
             stopQueueTimer();
             if (testMode) await runner.cancel();
             else await lease.stop();
+            await receivePromise?.catch(() => {
+            });
             await draining;
+            recoveryError = null;
             listenerState = "paused";
             return publicState();
           }
@@ -1840,6 +1982,10 @@
               connectionAuthenticated = true;
               await onboarding.inspect();
             } else if (msg.tool === "get_task") result = b.task(args.id);
+            else if (msg.tool === "inspect_source") {
+              await b.inspect(args.id);
+              result = b.task(args.id);
+            } else if (msg.tool === "repair_result_progress") result = await b.repairResultProgress(args.id);
             else if (msg.tool === "inspect_delivery") result = await b.inspectExecution(args.id);
             else if (msg.tool === "get_source_attachment") {
               const t = Object.values(b.state.tasks).find((t2) => t2.bindingId === args.bindingId);
@@ -1869,9 +2015,8 @@
           ui,
           onMessage,
           publicState,
-          async resume() {
-            await ready();
-            if (bridge.state.connection?.receivingRequested) await receive();
+          resume() {
+            return recovery.start();
           },
           async refreshProfile() {
             if (connectionAuthenticated) await appProfile.refresh();
@@ -1882,10 +2027,14 @@
           async prepareRemoval() {
             await ready();
             if (testMode) fail("TEST_ALREADY_ACTIVE");
+            receptionEpoch++;
+            recovery.cancel();
             const wasReceiving = receiving;
             receiving = false;
             stopQueueTimer();
-            if (wasReceiving) await lease.stop();
+            if (wasReceiving || receivePromise) await lease.stop();
+            await receivePromise?.catch(() => {
+            });
             await draining;
             listenerState = "paused";
             await bridge.serial(async () => {
@@ -1911,7 +2060,7 @@
       var { Journal } = require_journal();
       var { Applications } = require_applications();
       var { createApplication, error } = require_application();
-      var { fail } = require_core();
+      var { fail, holdsPartner } = require_core();
       var channel = new BroadcastChannel("feishu-task-bridge-v1");
       var journal = new Journal((req) => cindy.fs(req), async (text) => Array.from(new Uint8Array(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(text))), (b) => b.toString(16).padStart(2, "0")).join(""));
       var apps = new Applications(journal, () => crypto.randomUUID());
@@ -1938,7 +2087,7 @@
           channel,
           dispatchGate: (target, send) => {
             const p = dispatchTail.then(() => {
-              if (apps.entries().some((other) => other.id !== id && Object.values(other.state.tasks).some((t) => t.dispatch?.target?.id === target.id && (t.orphanedDelivery || !["done", "stopped"].includes(t.state))))) fail("TARGET_BUSY");
+              if (apps.entries().some((other) => other.id !== id && Object.values(other.state.tasks).some((t) => t.dispatch?.target?.id === target.id && holdsPartner(t)))) fail("TARGET_BUSY");
               return send();
             });
             dispatchTail = p.catch(() => {
@@ -2119,15 +2268,15 @@
           else channel.postMessage({ type: "error", error: err });
         }
       });
-      ready().then(async () => {
+      var startupRecovery = new (require_startup_recovery()).StartupRecovery(async () => {
+        await ready();
         for (const a of apps.entries()) if (a.status === "active" && a.state.connection?.receivingRequested) {
-          try {
-            await runtime(a.id).resume();
-          } catch (e) {
-            channel.postMessage({ type: "error", error: error(e) });
-          }
+          await runtime(a.id).resume();
         }
-      }).catch((e) => channel.postMessage({ type: "error", error: error(e) }));
+      }, (e) => {
+        if (e) channel.postMessage({ type: "error", error: error(e) });
+      });
+      startupRecovery.start();
     }
   });
   require_main();

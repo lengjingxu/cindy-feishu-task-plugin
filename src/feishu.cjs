@@ -12,6 +12,11 @@ async function jsonFetch(fetcher, path, init) {
     // Only the subscription endpoint's bounded error description is retained;
     // auth responses, headers, credentials and task content never enter it.
     if(path.startsWith("/task/v2/task_v2/task_subscription"))error.subscriptionMessage=String(body.msg||"").slice(0,300).replace(/[A-Za-z0-9_-]{32,}/g,"[redacted]");
+    if(/^\/task\/v2\/tasks\/[a-f0-9-]{36}$/i.test(path) && init?.method==='PATCH'){
+      const message=String(body.msg||'').slice(0,300).replace(/https?:\/\/\S+/g,'[url]').replace(/[A-Za-z0-9_-]{32,}/g,'[redacted]');
+      const logId=body.error?.log_id||r.headers?.get?.('x-tt-logid');
+      error.taskDiagnostic={message,fieldViolations:(body.error?.field_violations||[]).slice(0,5).map(v=>({field:String(v.field||'').slice(0,100),description:String(v.description||'').slice(0,200).replace(/[A-Za-z0-9_-]{32,}/g,'[redacted]')})),...(/^[a-z0-9_-]{8,80}$/i.test(logId||'')?{logId}: {})};
+    }
     throw error;
   }
   if (!r.ok) fail("FEISHU_HTTP_" + r.status);
@@ -97,6 +102,8 @@ async function action(params, secret, fetcher = fetch, host = null) {
       return {verified:true,appId:params.appId,code:r.code,subscriptionAccepted:true};
     }
     if (!/^[0-9a-f-]{36}$/i.test(params.guid || "")) fail("TASK_GUID_INVALID");
+    if(params.executionId!==undefined && (typeof params.executionId!=='string'||!/^[A-Za-z0-9:_-]{1,256}$/.test(params.executionId)))fail('EXECUTION_ID_INVALID');
+    const execution=params.executionId?{execution_id:params.executionId}:{};
     const path = "/task/v2/tasks/" + params.guid;
     const raw = await request(path); const t = raw.data?.task; if (!t) fail("FEISHU_TASK_INVALID");
     const assignees = (t.members || []).filter(m => m.role === "assignee");
@@ -143,12 +150,12 @@ async function action(params, secret, fetcher = fetch, host = null) {
       const op=params.operation;
       if(!op||typeof op.message!=='string'||!op.message.trim()||new TextEncoder().encode(op.message).length>3000)fail('ACTIVITY_INVALID');
       if(op.kind==='comment') {
-        const r=await request('/task/v2/comments','POST',{resource_type:'task',resource_id:params.guid,content:op.message});const c=r.data?.comment;
+        const r=await request('/task/v2/comments','POST',{resource_type:'task',resource_id:params.guid,content:op.message,...execution});const c=r.data?.comment;
         if(!c?.id||c.resource_id!==params.guid||c.resource_type!=='task')fail('COMMENT_RECEIPT_INVALID');
         return {id:c.id,resourceId:c.resource_id};
       }
       if(op.kind==='step' && Number.isSafeInteger(op.timestamp)&&op.timestamp>0&&op.timestamp<100000000000&&typeof op.key==='string') {
-        await request('/task/v2/agent_task_step_info/append_task_steps','POST',{task_guid:params.guid,idempotent_key:op.key,task_steps:[{content:op.message,timestamp:op.timestamp}]});
+        await request('/task/v2/agent_task_step_info/append_task_steps','POST',{task_guid:params.guid,idempotent_key:op.key,task_steps:[{content:op.message,timestamp:op.timestamp}],...execution});
         return {accepted:true,independentReadback:false};
       }
       fail('ACTIVITY_INVALID');
@@ -166,7 +173,7 @@ async function action(params, secret, fetcher = fetch, host = null) {
       task = { agent_task_progress: params.operation.value.message, agent_task_status: params.operation.value.status };
       fields = ["agent_task_progress", "agent_task_status"];
     } else fail("WRITE_UNSUPPORTED");
-    await request(path, "PATCH", { task, update_fields: fields });
+    await request(path, "PATCH", { task, update_fields: fields,...execution });
     return { written: true, requiresReadback: true };
   } finally { token = undefined; secret = undefined; }
 }

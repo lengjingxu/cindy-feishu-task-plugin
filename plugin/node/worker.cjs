@@ -70,12 +70,12 @@ var require_artifacts = __commonJS({
         grantFor(artifact, grant);
         if (!this.authenticated()) fail("HOST_UPLOAD_AUTH_UNAVAILABLE");
       }
-      async send(taskGuid, artifact, grant, callId) {
+      async send(taskGuid, artifact, grant, callId, executionId) {
         this.prepare(artifact, grant);
         const response = await this.fetch({
           url: "https://open.feishu.cn/open-apis/task/v2/attachments/upload",
           method: "POST",
-          uploadDir: { ...grantFor(artifact, grant), fields: { resource_type: "task_delivery", resource_id: taskGuid } },
+          uploadDir: { ...grantFor(artifact, grant), fields: { resource_type: "task_delivery", resource_id: taskGuid, ...executionId ? { execution_id: executionId } : {} } },
           callId
         });
         if (!response.ok || response.status < 200 || response.status >= 300 || response.truncated) fail("FILE_UPLOAD_UNCERTAIN");
@@ -123,6 +123,12 @@ var require_core = __commonJS({
       throw Object.assign(new Error(code), { code });
     }
     var active = /* @__PURE__ */ new Set(["dispatching", "uncertain", "delivered", "running", "review", "needs_input", "write_blocked", "writing", "write_uncertain", "write_failed", "cancel_check"]);
+    function holdsPartner(t) {
+      if (!active.has(t.state) && !t.orphanedDelivery) return false;
+      const r = t.executionReceipt, d = t.dispatch;
+      const finishedWrite = ["write_blocked", "write_failed", "write_uncertain"].includes(t.state) && !t.orphanedDelivery && r?.found === true && r.settled === true && r.status === "accepted" && r.result?.outcome === "completed" && d && r.requestKey === d.requestKey && r.target?.kind === d.target.kind && r.target?.id === d.target.id && r.taskId === t.targetTaskId && typeof r.executionId === "string" && r.executionId.startsWith("plugin-target:") && r.executionId === t.receipt?.executionId;
+      return !finishedWrite;
+    }
     var changed = (t, snapshot) => Boolean(t.dispatch && (t.snapshot.title !== snapshot.title || t.snapshot.description !== snapshot.description || !snapshot.done && t.snapshot.contextVersion && snapshot.contextVersion && !snapshot.contextErrors?.length && contextKey(t.snapshot) !== contextKey(snapshot)));
     function plan(t, snapshot, now) {
       if (t.dispatch) return;
@@ -208,7 +214,7 @@ var require_core = __commonJS({
           const priorUnassigned = prior?.assigned === false && prior.observedAt >= e.baseline && prior.observedAt < e.eventAt;
           const inventoryProven = baseline?.appId === e.appId && baseline.at === e.baseline && Array.isArray(baseline.assigned) && !baseline.assigned.includes(e.guid);
           const assignmentProven = afterEnable && (priorUnassigned || inventoryProven);
-          const startRequested = e.agentStartRequested === true && freshEvent && snapshot.soleAppAssignee === true && snapshot.agentStatus === 1;
+          const startRequested = e.agentStartRequested === true && freshEvent && (!prior || !Number.isSafeInteger(prior.eventAt) || e.eventAt > prior.eventAt) && !t?.previousExecutions?.some((old) => old.feishuExecutionId && old.feishuExecutionId === e.executionId) && snapshot.soleAppAssignee === true && snapshot.agentStatus === 1;
           next.assignmentObservations ||= {};
           if (!prior || !Number.isSafeInteger(e.eventAt) || e.eventAt >= (prior.eventAt || 0))
             next.assignmentObservations[observationKey] = { assigned: snapshot.assigned === true, observedAt, eventAt: e.eventAt || 0 };
@@ -216,6 +222,25 @@ var require_core = __commonJS({
           if (!t && (e.isCreate && Number.isFinite(e.baseline) && snapshot.createdAt >= e.baseline || assignmentProven || startRequested) && snapshot.assigned && !snapshot.done && !snapshot.deleted) {
             next.events[eventKey].intake = startRequested ? "explicit_start" : assignmentProven ? "live_assignment" : "created";
             t = next.tasks[e.guid] = { id: e.guid, appId: e.appId, partnerId: e.partnerId, queuedTarget: e.partnerId ? { kind: "bot", id: e.partnerId } : null, bindingId: this.uuid(), generation: 1, sequence: 0, reports: {}, state: "pending" };
+          }
+          if (t && startRequested && e.executionId && e.executionId !== t.feishuExecutionId && ["write_uncertain", "write_failed", "write_blocked"].includes(t.state) && !holdsPartner(t) && !t.result) {
+            const history = [...t.previousExecutions || [], { ...t, previousExecutions: void 0 }];
+            t = next.tasks[e.guid] = {
+              id: t.id,
+              appId: t.appId,
+              partnerId: t.partnerId,
+              queuedTarget: { kind: "bot", id: t.partnerId },
+              bindingId: this.uuid(),
+              generation: t.generation + 1,
+              sequence: 0,
+              reports: {},
+              state: "pending",
+              previousExecutions: history
+            };
+          }
+          if (t && startRequested && e.executionId && !t.dispatch) {
+            t.feishuExecutionId = e.executionId;
+            t.feishuStartAt = e.eventAt;
           }
           if (t) {
             t.snapshot = snapshot;
@@ -331,7 +356,7 @@ var require_core = __commonJS({
           if (target?.kind !== "bot" || !target.id) fail("TARGET_INVALID");
           if (target.id !== this.partnerTarget(id).id) fail("CONNECTION_PARTNER_MISMATCH");
           if (t.queuedTarget && JSON.stringify(t.queuedTarget) !== JSON.stringify(target)) fail("QUEUED_TARGET_FROZEN");
-          if (Object.values(this.state.tasks).some((x) => (active.has(x.state) || x.orphanedDelivery) && x.dispatch?.target.id === target.id)) fail("TARGET_BUSY");
+          if (Object.values(this.state.tasks).some((x) => holdsPartner(x) && x.dispatch?.target.id === target.id)) fail("TARGET_BUSY");
           await this.assertExecution();
           const resolved = await this.targets.resolve({ target });
           if (resolved.id !== target.id || resolved.kind !== "bot") fail("TARGET_UNAVAILABLE");
@@ -474,10 +499,28 @@ var require_core = __commonJS({
             n.outbox.push({ id: this.uuid(), kind: "text", value: args.message + "\n\u9A8C\u8BC1\u8303\u56F4\uFF1A" + n.result.verification, state: "prepared" });
             for (const artifact of artifacts) n.outbox.push({ id: this.uuid(), kind: "file", value: artifact, taskGuid: t.id, state: "prepared" });
           }
-          n.outbox.push({ id: this.uuid(), kind: "progress", value: { message: args.message, status: kind === "progress" ? 2 : 3 }, state: "prepared" });
+          n.outbox.push({ id: this.uuid(), kind: "progress", value: { message: kind === "result" ? "\u7ED3\u679C\u5DF2\u56DE\u62A5" : kind === "clarification" ? "\u7B49\u5F85\u8865\u5145\u4FE1\u606F" : args.message, status: kind === "progress" ? 2 : 3 }, state: "prepared" });
           if (kind === "result") n.outbox.push({ id: this.uuid(), kind: "complete", value: 4, state: "prepared" });
           await this.save(next);
           return this.writeRemaining(t.id);
+        });
+      }
+      async repairResultProgress(id) {
+        return this.serial(async () => {
+          const t = this.task(id), op = t.outbox?.find((x) => x.state === "attempted");
+          if (t.state !== "write_uncertain" || t.error !== "FEISHU_API_99992402" || t.writeDiagnostic?.message !== "field validation failed" || !t.result || op?.kind !== "progress" || op.value.message !== t.result.summary || op.value.message.length <= 100) fail("PROGRESS_REPAIR_NOT_AVAILABLE");
+          const snap = await this.remote.get(id);
+          if (!snap.assigned || snap.done || snap.deleted || changed(t, snap)) fail("SOURCE_REVOKED");
+          const n = clone(this.state), old = n.tasks[id].outbox.find((x) => x.id === op.id);
+          n.tasks[id].rejectedWrites ||= [];
+          n.tasks[id].rejectedWrites.push({ ...clone(old), diagnostic: n.tasks[id].writeDiagnostic, error: n.tasks[id].error });
+          old.id = this.uuid();
+          old.value.message = "\u7ED3\u679C\u5DF2\u56DE\u62A5";
+          old.state = "prepared";
+          delete n.tasks[id].error;
+          delete n.tasks[id].writeDiagnostic;
+          await this.save(n);
+          return this.writeRemaining(id);
         });
       }
       async reconcile(id) {
@@ -499,10 +542,11 @@ var require_core = __commonJS({
           return this.writeRemaining(t.id, { artifactId: args.artifactId, grant, callId });
         });
       }
-      async blocked(id, code, state = "write_blocked") {
+      async blocked(id, code, state = "write_blocked", diagnostic) {
         const next = clone(this.state);
         next.tasks[id].state = state;
         next.tasks[id].error = code;
+        if (diagnostic) next.tasks[id].writeDiagnostic = clone(diagnostic);
         await this.save(next);
         return clone(next.tasks[id]);
       }
@@ -544,7 +588,7 @@ var require_core = __commonJS({
           try {
             receipt = op.kind === "file" ? await this.remote.upload(id, op.value, delivery.grant, delivery.callId) : await this.remote.write(id, op, snap);
           } catch (e) {
-            return this.blocked(id, e.code || "WRITE_OUTCOME_UNKNOWN", "write_uncertain");
+            return this.blocked(id, e.code || "WRITE_OUTCOME_UNKNOWN", "write_uncertain", e.diagnostic);
           }
           const saved = clone(this.state);
           saved.tasks[id].outbox[i].receipt = receipt || {};
@@ -598,7 +642,7 @@ var require_core = __commonJS({
         });
       }
     };
-    module2.exports = { Bridge, initial, fail };
+    module2.exports = { Bridge, initial, fail, holdsPartner };
   }
 });
 
@@ -127763,6 +127807,11 @@ var require_feishu = __commonJS({
       if (body.code !== 0) {
         const error = Object.assign(new Error("FEISHU_API_" + String(body.code)), { code: "FEISHU_API_" + String(body.code) });
         if (path.startsWith("/task/v2/task_v2/task_subscription")) error.subscriptionMessage = String(body.msg || "").slice(0, 300).replace(/[A-Za-z0-9_-]{32,}/g, "[redacted]");
+        if (/^\/task\/v2\/tasks\/[a-f0-9-]{36}$/i.test(path) && init?.method === "PATCH") {
+          const message = String(body.msg || "").slice(0, 300).replace(/https?:\/\/\S+/g, "[url]").replace(/[A-Za-z0-9_-]{32,}/g, "[redacted]");
+          const logId = body.error?.log_id || r.headers?.get?.("x-tt-logid");
+          error.taskDiagnostic = { message, fieldViolations: (body.error?.field_violations || []).slice(0, 5).map((v) => ({ field: String(v.field || "").slice(0, 100), description: String(v.description || "").slice(0, 200).replace(/[A-Za-z0-9_-]{32,}/g, "[redacted]") })), .../^[a-z0-9_-]{8,80}$/i.test(logId || "") ? { logId } : {} };
+        }
         throw error;
       }
       if (!r.ok) fail("FEISHU_HTTP_" + r.status);
@@ -127869,6 +127918,8 @@ var require_feishu = __commonJS({
           return { verified: true, appId: params.appId, code: r.code, subscriptionAccepted: true };
         }
         if (!/^[0-9a-f-]{36}$/i.test(params.guid || "")) fail("TASK_GUID_INVALID");
+        if (params.executionId !== void 0 && (typeof params.executionId !== "string" || !/^[A-Za-z0-9:_-]{1,256}$/.test(params.executionId))) fail("EXECUTION_ID_INVALID");
+        const execution = params.executionId ? { execution_id: params.executionId } : {};
         const path = "/task/v2/tasks/" + params.guid;
         const raw = await request(path);
         const t = raw.data?.task;
@@ -127928,13 +127979,13 @@ var require_feishu = __commonJS({
           const op = params.operation;
           if (!op || typeof op.message !== "string" || !op.message.trim() || new TextEncoder().encode(op.message).length > 3e3) fail("ACTIVITY_INVALID");
           if (op.kind === "comment") {
-            const r = await request("/task/v2/comments", "POST", { resource_type: "task", resource_id: params.guid, content: op.message });
+            const r = await request("/task/v2/comments", "POST", { resource_type: "task", resource_id: params.guid, content: op.message, ...execution });
             const c = r.data?.comment;
             if (!c?.id || c.resource_id !== params.guid || c.resource_type !== "task") fail("COMMENT_RECEIPT_INVALID");
             return { id: c.id, resourceId: c.resource_id };
           }
           if (op.kind === "step" && Number.isSafeInteger(op.timestamp) && op.timestamp > 0 && op.timestamp < 1e11 && typeof op.key === "string") {
-            await request("/task/v2/agent_task_step_info/append_task_steps", "POST", { task_guid: params.guid, idempotent_key: op.key, task_steps: [{ content: op.message, timestamp: op.timestamp }] });
+            await request("/task/v2/agent_task_step_info/append_task_steps", "POST", { task_guid: params.guid, idempotent_key: op.key, task_steps: [{ content: op.message, timestamp: op.timestamp }], ...execution });
             return { accepted: true, independentReadback: false };
           }
           fail("ACTIVITY_INVALID");
@@ -127955,7 +128006,7 @@ var require_feishu = __commonJS({
           task = { agent_task_progress: params.operation.value.message, agent_task_status: params.operation.value.status };
           fields = ["agent_task_progress", "agent_task_status"];
         } else fail("WRITE_UNSUPPORTED");
-        await request(path, "PATCH", { task, update_fields: fields });
+        await request(path, "PATCH", { task, update_fields: fields, ...execution });
         return { written: true, requiresReadback: true };
       } finally {
         token = void 0;
@@ -128073,7 +128124,8 @@ input.on("line", async (line) => {
     reply({ jsonrpc: "2.0", id: request.id, result: await handle(request) });
   } catch (e) {
     const code = /^[A-Z][A-Z0-9_]{1,80}$/.test(e.code || "") ? e.code : "WORKER_OPERATION_FAILED";
-    reply({ jsonrpc: "2.0", id: request.id, error: { code: code === "METHOD_NOT_FOUND" ? -32601 : -32e3, message: code } });
+    if (e.taskDiagnostic) reply({ jsonrpc: "2.0", id: request.id, result: { operationError: code, diagnostic: e.taskDiagnostic } });
+    else reply({ jsonrpc: "2.0", id: request.id, error: { code: code === "METHOD_NOT_FOUND" ? -32601 : -32e3, message: code } });
   } finally {
     if (request.cindy?.secrets) {
       for (const key of slots) delete request.cindy.secrets[key];

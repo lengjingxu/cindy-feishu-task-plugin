@@ -39,3 +39,22 @@ test('开工请求拒绝缺失/过期/未来时间、非唯一执行人、已执
   assert.equal(await f.event(kind,{agentStartRequested:kind!=='ordinary',eventAt:kind==='missing'?null:kind==='old'?90:kind==='future'?200:120}),null);assert.equal(f.sends,0);
  }
 });
+
+test('受控开工轮次只从真实新事件关联，重放不重投，前轮回写证据完整保留',async()=>{
+ const f=await fixture();Object.assign(f.snapshot,{assigned:true,soleAppAssignee:true,agentStatus:1});
+ let t=await f.event('first-run',{agentStartRequested:true,eventAt:120,executionId:'run-one'});assert.equal(t.feishuExecutionId,'run-one');await f.b.drain();
+ t=f.b.state.tasks.task;t.state='write_uncertain';t.outbox=[{kind:'progress',state:'attempted',value:{message:'开始',status:2}}];t.error='FEISHU_API_1470400';
+ t.executionReceipt={found:true,status:'accepted',settled:true,requestKey:t.dispatch.requestKey,target:t.dispatch.target,executionId:t.receipt.executionId,taskId:t.targetTaskId,result:{outcome:'completed'}};
+ const previous=structuredClone(t);t=await f.event('new-run',{agentStartRequested:true,eventAt:130,executionId:'run-two'});
+ assert.equal(t.feishuExecutionId,'run-two');assert.equal(t.generation,2);assert.notEqual(t.bindingId,previous.bindingId);assert.deepEqual(JSON.parse(JSON.stringify(t.previousExecutions[0])),previous);
+ await f.b.drain();await f.event('duplicate-run',{agentStartRequested:true,eventAt:140,executionId:'run-two'});await f.b.drain();assert.equal(f.sends,2);
+});
+
+test('迟到或历史执行轮次不能恢复旧执行或覆盖当前失败轮次',async()=>{
+ const f=await fixture();Object.assign(f.snapshot,{assigned:true,soleAppAssignee:true,agentStatus:1});
+ await f.event('start-current',{agentStartRequested:true,eventAt:130,executionId:'run-current'});await f.b.drain();
+ const t=f.b.state.tasks.task;t.state='write_uncertain';t.executionReceipt={found:true,status:'accepted',settled:true,requestKey:t.dispatch.requestKey,target:t.dispatch.target,executionId:t.receipt.executionId,taskId:t.targetTaskId,result:{outcome:'completed'}};t.previousExecutions=[{feishuExecutionId:'run-old'}];
+ const key=t.dispatch.requestKey;
+ await f.event('late-old',{agentStartRequested:true,eventAt:120,executionId:'run-other'});await f.b.drain();assert.equal(f.sends,1);
+ await f.event('replayed-old',{agentStartRequested:true,eventAt:140,executionId:'run-old'});await f.b.drain();assert.equal(f.sends,1);assert.equal(f.b.task('task').dispatch.requestKey,key);assert.equal(f.b.task('task').feishuExecutionId,'run-current');
+});
