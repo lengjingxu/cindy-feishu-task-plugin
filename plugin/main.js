@@ -1342,7 +1342,8 @@
           this.active = false;
         }
         start(appId, baseline, durationMs = 6e5) {
-          if (this.active) throw Object.assign(Error("LISTENER_BUSY"), { code: "LISTENER_BUSY" });
+          if (this.active || this.stopping) throw Object.assign(Error("LISTENER_BUSY"), { code: "LISTENER_BUSY" });
+          this.lastError = null;
           this.connected = false;
           this.active = true;
           const deadline = durationMs === Infinity ? Infinity : this.now() + Math.min(6e5, durationMs);
@@ -1350,15 +1351,31 @@
             try {
               for (let lease = 0; this.active && this.now() < deadline; lease++) {
                 this.status(lease ? "renewing" : "connecting");
+                this.connected = false;
                 const r = await this.node("listener/run", { appId, baseline, durationMs: Math.max(1e3, Math.min(6e4, deadline - this.now())) });
                 if (!this.active) break;
+                if (r?.reason === "unexpected_exit" && r.childExited === true) {
+                  this.lastError = { code: "LISTENER_UNEXPECTED_EXIT" };
+                  this.status("reconnecting");
+                  await new Promise((resolve) => {
+                    this.retryResolve = resolve;
+                    this.retryTimer = setTimeout(resolve, 5e3);
+                  });
+                  clearTimeout(this.retryTimer);
+                  this.retryTimer = void 0;
+                  this.retryResolve = null;
+                  continue;
+                }
                 if (r?.reason !== "lease_expired" || r.childExited !== true) {
+                  this.lastError = { code: "LISTENER_EXIT_UNCONFIRMED", reason: r?.reason };
                   this.status("failed");
                   return;
                 }
+                this.lastError = null;
                 this.status("gap_check");
               }
-            } catch {
+            } catch (e) {
+              this.lastError = { code: e.code || "LISTENER_RPC_FAILED" };
               this.status("failed");
             } finally {
               this.active = false;
@@ -1368,6 +1385,7 @@
         }
         connection(state) {
           this.connected = state === "connected";
+          if (this.connected) this.lastError = null;
           if (this.connected && this.readyWait) {
             clearTimeout(this.readyWait.timer);
             this.readyWait.resolve();
@@ -1392,15 +1410,23 @@
           return this.readyWait.promise;
         }
         async stop() {
-          if (this.readyWait) {
-            clearTimeout(this.readyWait.timer);
-            this.readyWait.reject(Object.assign(Error("LISTENER_STOPPED"), { code: "LISTENER_STOPPED" }));
-            this.readyWait = null;
+          this.stopping = true;
+          const running = this.promise;
+          try {
+            if (this.readyWait) {
+              clearTimeout(this.readyWait.timer);
+              this.readyWait.reject(Object.assign(Error("LISTENER_STOPPED"), { code: "LISTENER_STOPPED" }));
+              this.readyWait = null;
+            }
+            this.active = false;
+            clearTimeout(this.retryTimer);
+            this.retryResolve?.();
+            await this.node("listener/stop", {});
+            await running;
+            this.status("paused");
+          } finally {
+            this.stopping = false;
           }
-          this.active = false;
-          await this.node("listener/stop", {});
-          await this.promise;
-          this.status("paused");
         }
       };
       module.exports = { LeaseLoop };
@@ -1744,6 +1770,7 @@
             connectionAuthenticated,
             receivingRequested: bridge.state.connection?.receivingRequested === true,
             recoveryError,
+            listenerError: lease?.lastError || null,
             limitation: "\u666E\u901A\u6587\u4EF6\u4EA4\u4ED8\u3001\u5B89\u88C5\u540E\u8EAB\u4EFD\u5BF9\u9F50\u4E0E\u65AD\u7EBF\u8865\u6536\u5C1A\u5F85\u9A8C\u6536\u3002"
           };
         }
@@ -1896,7 +1923,7 @@
             return publicState();
           }
           if (action === "receive") {
-            await receive();
+            await receive(b.state.connection?.receivingRequested === true);
             return publicState();
           }
           if (action === "pause") {
@@ -2237,6 +2264,17 @@
             const node = await cindy.node.request({ method: "runtime/capabilities", params: {}, timeoutMs: 3e4 });
             const support = { node: node.ok ? node.result : null, nodeError: node.ok ? void 0 : node.errorCode, targets: typeof cindy.targets?.list === "function", scopedDelegationProbe: typeof cindy.targets?.capabilities === "function", fullWorkflowVerified: false };
             await cindy.send({ type: "tool-result", callId: msg.callId, ok: true, result: support });
+            return;
+          }
+          if (msg.tool === "inspect_reception") {
+            if (!loaded) fail("RECEPTION_INITIALIZING");
+            const result = [];
+            for (const a of apps.entries()) if (a.status !== "deleted") {
+              const r = runtimes.get(a.id);
+              const v = r?.bridge ? r.publicState() : { receivingRequested: a.state.connection?.receivingRequested === true, receiving: false, listenerState: "not_initialized" };
+              result.push({ applicationId: a.id, name: a.state.appProfile?.name, status: a.status, appId: a.state.connection?.appId, partnerId: a.state.connection?.partnerId, baseline: a.state.connection?.baseline, receivingRequested: v.receivingRequested, receiving: v.receiving, listenerState: v.listenerState, listenerError: v.listenerError, recoveryError: v.recoveryError, connectionAuthenticated: v.connectionAuthenticated, pendingEvents: Object.values(a.state.events || {}).filter((e) => e.pending).map((e) => ({ id: e.id, guid: e.guid, eventAt: e.eventAt, intake: e.intake })), taskCount: Object.keys(a.state.tasks).length });
+            }
+            await cindy.send({ type: "tool-result", callId: msg.callId, ok: true, result });
             return;
           }
           await ready();

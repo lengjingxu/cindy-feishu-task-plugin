@@ -4,7 +4,7 @@
   "name": "飞书任务",
   "description": "将飞书任务交给关联的 Cindy 伙伴执行，回报进度、结果和文件；支持最多四个应用连接。当前仅支持 macOS。",
   "whenToUse": "连接飞书任务应用、查看任务看板，或由原关联伙伴向飞书任务回报进度、结果和真实文件。",
-  "version": "0.15.17",
+  "version": "0.15.18",
   "kind": "chip",
   "entry": "main.js",
   "icon": "assets/icon.png",
@@ -348,6 +348,15 @@
         ],
         "additionalProperties": false
       }
+    },
+    {
+      "name": "inspect_reception",
+      "description": "只读查看各应用接收意图、实时监听状态、原基线和待处理事件，不读取凭据、不恢复接收或派发任务。",
+      "parameters": {
+        "type": "object",
+        "properties": {},
+        "additionalProperties": false
+      }
     }
   ],
   "node": {
@@ -381,7 +390,7 @@
       "accounts.feishu.cn"
     ]
   },
-  "releaseNotes": "“全部状态”包含已停止任务；修复飞书原生“立即执行”发出的 task_agent_start 未接入的问题。仅接受接收开启后的真实开工事件，并重新核对唯一应用执行人、未完成及排队状态，不批量导入历史任务。普通任务完成后保留。",
+  "releaseNotes": "已确认监听子进程退出后按原接收基线重连；恢复接收不重置基线。新增只读接收状态检查，保留未知退出错误，不重复派发历史任务。",
   "setup": {
     "requires": []
   },

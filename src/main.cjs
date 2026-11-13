@@ -124,6 +124,15 @@ cindy.onHostMessage(async msg=>{
    const support={node:node.ok?node.result:null,nodeError:node.ok?undefined:node.errorCode,targets:typeof cindy.targets?.list==='function',scopedDelegationProbe:typeof cindy.targets?.capabilities==='function',fullWorkflowVerified:false};
    await cindy.send({type:'tool-result',callId:msg.callId,ok:true,result:support});return;
   }
+  if(msg.tool==='inspect_reception'){
+   if(!loaded)fail('RECEPTION_INITIALIZING');
+   const result=[];
+   for(const a of apps.entries())if(a.status!=='deleted'){
+    const r=runtimes.get(a.id);const v=r?.bridge?r.publicState():{receivingRequested:a.state.connection?.receivingRequested===true,receiving:false,listenerState:'not_initialized'};
+    result.push({applicationId:a.id,name:a.state.appProfile?.name,status:a.status,appId:a.state.connection?.appId,partnerId:a.state.connection?.partnerId,baseline:a.state.connection?.baseline,receivingRequested:v.receivingRequested,receiving:v.receiving,listenerState:v.listenerState,listenerError:v.listenerError,recoveryError:v.recoveryError,connectionAuthenticated:v.connectionAuthenticated,pendingEvents:Object.values(a.state.events||{}).filter(e=>e.pending).map(e=>({id:e.id,guid:e.guid,eventAt:e.eventAt,intake:e.intake})),taskCount:Object.keys(a.state.tasks).length});
+   }
+   await cindy.send({type:'tool-result',callId:msg.callId,ok:true,result});return;
+  }
   await ready();
   if(msg.tool==='list_inbox'){const s=await state();const offset=Math.max(0,msg.args?.offset||0);await cindy.send({type:'tool-result',callId:msg.callId,ok:true,result:s.tasks.slice(offset,offset+50)});return;}
   const id=msg.tool==='bind_application'?(msg.args?.applicationId||apps.entries().find(a=>a.status==='active')?.id):apps.route(msg.args||{});

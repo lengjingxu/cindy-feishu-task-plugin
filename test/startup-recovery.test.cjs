@@ -78,3 +78,6 @@ test('historical receipt lookup failure preserves its reservation without stoppi
  global.cindy.targets.get=async()=>{throw Object.assign(Error('offline'),{code:'HOST_OFFLINE'});};
  try{await h.r.resume();assert.equal(h.r.publicState().receiving,true);assert.equal(h.starts.length,1);assert.equal(h.data.tasks.old.state,'write_uncertain');assert.equal(h.data.tasks.next.queueError,'TARGET_BUSY');}finally{await h.r.ui('pause');delete global.cindy;}
 });
+test('接收中断后的按钮恢复保留原基线，不把停收期间任务排入新基线',async()=>{
+ const h=fixture();try{await h.r.ready();await h.r.ui('receive');assert.equal(h.starts.length,1);assert.equal(h.starts[0].params.baseline,h.baseline);assert.equal(h.calls.some(c=>c.params?.action==='assignment_baseline'),false);assert.deepEqual(h.data.connection.assignmentBaseline.assigned,['already-assigned']);}finally{await h.r.ui('pause');delete global.cindy;}
+});
