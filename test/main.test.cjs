@@ -153,3 +153,10 @@ test('设置页在途原应用续授权固定身份，禁止解除与工具换�
  await h.ui('authorize-binding',{token:begin.result.token});const call=h.nodeCalls.find(x=>x.method==='binding/authorize');assert.equal(call.params.appId,appId);assert.equal(call.params.authorizationMode,'settings');assert.equal(call.callId,undefined);
  const removal=await h.ui('prepare-removal',{mode:'disconnect'});assert.equal(removal.ok,false);assert.equal(h.sent.length,0);
 });
+test('接收诊断不初始化应用、不读凭据、不派发或修改账本',async()=>{
+ const h=await multiFixture();await h.ui('state');await h.ui('add-application');
+ const before=JSON.stringify([...h.files]);const calls=h.nodeCalls.length;
+ await h.tool({type:'tool-call',tool:'inspect_reception',callId:'inspect',args:{}});
+ const reply=h.toolReplies.at(-1);assert.equal(reply.ok,true);assert.equal(reply.result.length,2);
+ assert.equal(reply.result[1].listenerState,'not_initialized');assert.equal(h.nodeCalls.length,calls);assert.equal(JSON.stringify([...h.files]),before);assert.equal(h.sent.length,0);
+});

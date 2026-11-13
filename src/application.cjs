@@ -132,7 +132,7 @@ async function ready() {
 function publicState() { return { tasks: Object.values(bridge.state.tasks).map(t => ({ ...t, ...(t.result ? { result: { ...t.result,
   artifacts: (t.result.artifacts || []).map(a => { let available = false; try { verifiedArtifact(t, a.id); available = true; } catch {} return { ...a, available }; }) } } : {}) })),
   connection: {appId:bridge.state.connection?.appId}, appProfile:bridge.state.appProfile, hostServicesAvailable, setupTask:bridge.state.setupTask, binding: channelBinding.state, onboarding: onboarding.state, testRun: bridge.state.testRun, receiving, listenerState, connectionAuthenticated,
-  receivingRequested:bridge.state.connection?.receivingRequested===true,recoveryError,
+  receivingRequested:bridge.state.connection?.receivingRequested===true,recoveryError,listenerError:lease?.lastError||null,
   limitation: "普通文件交付、安装后身份对齐与断线补收尚待验收。" }; }
 function receive(resuming=false) {
   if(receivePromise)return receivePromise;
@@ -219,7 +219,7 @@ async function ui(action, args = {}) {
   if (action === "inspect-configuration") { await onboarding.inspect(); return publicState(); }
   if (action === "test-connection") { if(receiving)fail("PAUSE_FIRST"); await runner.start(args.target); return publicState(); }
   if (action === "cancel-test") { await runner.cancel(); return publicState(); }
-  if (action === "receive") { await receive(); return publicState(); }
+  if (action === "receive") { await receive(b.state.connection?.receivingRequested===true); return publicState(); }
   if (action === "pause") {receptionEpoch++;recovery.cancel();await b.serial(async()=>{const n=JSON.parse(JSON.stringify(b.state));n.connection.receivingRequested=false;await b.save(n);});receiving=false;stopQueueTimer();if(testMode)await runner.cancel();else await lease.stop();await receivePromise?.catch(()=>{});await draining;recoveryError=null; listenerState = "paused"; return publicState(); }
 
   if (action === "recover-task") {
