@@ -66,6 +66,7 @@ function armQueueTimer(){
     const eligibleAt=Math.max(t.schedule?.notBefore||0,t.nextAttemptAt||0);
     due=Math.min(due,eligibleAt>now?eligibleAt:now+60000);
   }
+  for(const e of Object.values(bridge.state.events))if(e.pending&&!e.testOnly&&e.appId===bridge.state.connection?.appId)due=Math.min(due,e.nextReadAt>now?e.nextReadAt:now+60000);
   if(due===Infinity)return;
   // Busy partners and failed reads must not turn overdue work into a hot loop.
   const delay=due>now?Math.min(due-now,60000):60000;
@@ -76,6 +77,11 @@ async function tick(){
   if(!draining){
     stopQueueTimer();
     draining=(async()=>{
+      for(const [key,event] of Object.entries(bridge.state.events)){
+        if(!receiving||testMode)break;
+        if(!event.pending||event.testOnly||event.appId!==bridge.state.connection?.appId||(event.nextReadAt||0)>Date.now())continue;
+        try{await bridge.refresh(key);}catch(e){channel.postMessage({type:'error',error:error(e)});}
+      }
       if(Object.values(bridge.state.tasks).some(t=>['pending','scheduled'].includes(t.state)&&t.queuedTarget)){
         for(const t of Object.values(bridge.state.tasks))if(receiving&&['write_blocked','write_failed','write_uncertain'].includes(t.state)&&t.dispatch)
           try{await bridge.inspectExecution(t.id);}catch(e){channel.postMessage({type:'error',error:error(e)});}
@@ -242,10 +248,6 @@ async function onMessage(msg) {
         await b.ingest({...event,...(testMode?{testOnly:true,testRunId:runner.run?.id}:{})}); await node("listener/ack", { token, accepted: true });
         if(testMode) { await runner.tick(); }
         else {
-          const t = await b.refresh(event.appId + ":" + event.id);
-          if (t?.state === "pending") {
-            await b.enqueue(t.id,b.partnerTarget(t.id));
-          }
           await tick();
         }
       } catch (e) {

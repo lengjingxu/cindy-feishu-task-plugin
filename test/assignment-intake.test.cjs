@@ -58,3 +58,13 @@ test('迟到或历史执行轮次不能恢复旧执行或覆盖当前失败轮�
  await f.event('late-old',{agentStartRequested:true,eventAt:120,executionId:'run-other'});await f.b.drain();assert.equal(f.sends,1);
  await f.event('replayed-old',{agentStartRequested:true,eventAt:140,executionId:'run-old'});await f.b.drain();assert.equal(f.sends,1);assert.equal(f.b.task('task').dispatch.requestKey,key);assert.equal(f.b.task('task').feishuExecutionId,'run-current');
 });
+test('原生开工未接管保留最小判断依据，不保存源任务正文',async()=>{
+ const f=await fixture();f.snapshot.assigned=true;f.snapshot.soleAppAssignee=true;f.snapshot.agentStatus=2;
+ assert.equal(await f.event('declined',{agentStartRequested:true,eventAt:120}),null);
+ assert.deepEqual(f.b.state.events['app:declined'].startCheck,{freshEvent:true,soleAppAssignee:true,agentStatus:2,assigned:true,done:false,deleted:false,startRequested:false});assert.equal(f.sends,0);
+});
+test('读取失败的重试时间和原事件持久化，重启可继续同一读取',async()=>{
+ const f=await fixture();let saved;f.b.store.save=async s=>{saved=structuredClone(s)};f.b.remote.get=async()=>{throw Object.assign(Error('temporary'),{code:'TEMPORARY'})};
+ await assert.rejects(f.event('read',{agentStartRequested:true,eventAt:120}),{code:'TEMPORARY'});assert.equal(saved.events['app:read'].nextReadAt,60150);
+ const b=new Bridge({store:{load:async()=>saved,save:async s=>{saved=structuredClone(s)}},now:()=>60200,uuid:()=> 'restored',targets:f.b.targets,remote:{get:async()=>({...f.snapshot,assigned:true,soleAppAssignee:true,agentStatus:1})}});await b.load();const task=await b.refresh('app:read');assert.equal(task.partnerId,'bot');assert.equal(task.state,'pending');assert.equal(b.state.events['app:read'].baseline,100);assert.equal(b.state.events['app:read'].readError,undefined);assert.equal(b.state.events['app:read'].nextReadAt,undefined);
+});
