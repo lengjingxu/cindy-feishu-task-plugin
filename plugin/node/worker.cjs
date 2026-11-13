@@ -192,7 +192,13 @@ var require_core = __commonJS({
           try {
             snapshot = await this.remote.get(e.guid);
           } catch (error) {
-            if (error.code !== "FEISHU_API_1470404" || this.state.tasks[e.guid]?.state !== "stopped") throw error;
+            if (error.code !== "FEISHU_API_1470404" || this.state.tasks[e.guid]?.state !== "stopped") {
+              const next3 = clone(this.state);
+              next3.events[eventKey].readError = error.code || "SOURCE_READ_FAILED";
+              next3.events[eventKey].nextReadAt = this.now() + 6e4;
+              await this.save(next3);
+              throw error;
+            }
             const next2 = clone(this.state);
             next2.events[eventKey].pending = false;
             next2.events[eventKey].intake = "stopped_source_absent";
@@ -200,6 +206,8 @@ var require_core = __commonJS({
             return clone(next2.tasks[e.guid]);
           }
           const next = clone(this.state);
+          delete next.events[eventKey].readError;
+          delete next.events[eventKey].nextReadAt;
           let t = next.tasks[e.guid];
           const ownCompletion = t?.outbox?.some((op) => op.kind === "complete" && op.state === "attempted" && this.remote.matches(snapshot, op));
           if (t && !["done", "stopped"].includes(t.state) && (!snapshot.assigned || snapshot.deleted || snapshot.done && !ownCompletion || changed(t, snapshot))) {
@@ -219,6 +227,7 @@ var require_core = __commonJS({
           if (!prior || !Number.isSafeInteger(e.eventAt) || e.eventAt >= (prior.eventAt || 0))
             next.assignmentObservations[observationKey] = { assigned: snapshot.assigned === true, observedAt, eventAt: e.eventAt || 0 };
           if (!t && e.assigneesChanged && !assignmentProven) next.events[eventKey].intake = "assignment_unproven";
+          if (!t && e.agentStartRequested) next.events[eventKey].startCheck = { freshEvent, soleAppAssignee: snapshot.soleAppAssignee === true, agentStatus: snapshot.agentStatus ?? null, assigned: snapshot.assigned === true, done: snapshot.done === true, deleted: snapshot.deleted === true, startRequested };
           if (!t && (e.isCreate && Number.isFinite(e.baseline) && snapshot.createdAt >= e.baseline || assignmentProven || startRequested) && snapshot.assigned && !snapshot.done && !snapshot.deleted) {
             next.events[eventKey].intake = startRequested ? "explicit_start" : assignmentProven ? "live_assignment" : "created";
             t = next.tasks[e.guid] = { id: e.guid, appId: e.appId, partnerId: e.partnerId, queuedTarget: e.partnerId ? { kind: "bot", id: e.partnerId } : null, bindingId: this.uuid(), generation: 1, sequence: 0, reports: {}, state: "pending" };

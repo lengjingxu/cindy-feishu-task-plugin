@@ -29,15 +29,17 @@ test('现有监听心跳在到期时派发预约任务，暂停持久化且恢�
  }finally{finish?.();delete global.cindy;}
 });
 
-async function autonomousFixture(t,{sendError=false,busy=false,readError=false}={}){
+async function autonomousFixture(t,{sendError=false,busy=false,readError=false,eventOnly=false}={}){
  t.mock.timers.enable({apis:['Date','setTimeout'],now:1800000000000});
  const appId='cli_0000000000000001',guid='22222222-2222-4222-8222-222222222222';
- let sends=0,reads=0,finish,r,hold=busy;
+ let sends=0,reads=0,acks=0,finish,r,hold=busy;
  const future=Date.now()+10000;
  const snapshot={title:'自动预约',description:'fixture',assigned:true,soleAppAssignee:true,createdAt:1,contextVersion:1,start:{timestamp:future,isAllDay:false},textDeliveries:[],attachments:[],subtasks:[],tasklists:[],sourceAttachments:[]};
  let data={...initial(),connection:{appId,partnerId:'bot'},onboarding:{epoch:1,identity:{state:'verified',appId},permissions:{state:'verified'},association:{state:'selected',target:{kind:'bot',id:'bot'}},test:{state:'passed',epoch:1},registration:{runtime:{state:'verified',epoch:1}},subscription:{runtime:{state:'verified',epoch:1}},events:{runtime:{state:'verified',epoch:1}}},testRun:{target:{id:'bot'}},tasks:{[guid]:{id:guid,appId,partnerId:'bot',bindingId:'binding',generation:1,sequence:0,reports:{},state:'scheduled',schedule:{notBefore:future,timeZone:'Asia/Shanghai'},queuedTarget:{kind:'bot',id:'bot'},snapshot}}};
+ if(eventOnly){data.tasks={};delete snapshot.start;snapshot.agentStatus=1;}
  global.cindy={targets:{list:async()=>({targets:[]}),resolve:async p=>p.target,get:async()=>({found:false}),capabilities:async()=>({delegation:{version:1,execution:true,receiptQuery:true,settled:true}}),send:async p=>{sends++;if(sendError)throw Error('unknown transport');return{executionId:'plugin-target:execution',requestKey:p.requestKey,target:p.target,delivery:'queue',accepted:true,taskId:'session'};}}};
  const rawNode=async req=>{
+  if(req.method==='listener/ack'){acks++;return{ok:true,result:{}};}
   if(req.method==='binding/restore')return{ok:true,result:{saved:true,appId}};
   if(req.method==='listener/run'){queueMicrotask(()=>r.onMessage({type:'event',name:'node-notification',method:'listener/status',params:{state:'connected'}}));return new Promise(resolve=>finish=()=>resolve({ok:true,result:{reason:'paused',childExited:true}}));}
   if(req.method==='listener/stop'){finish?.();return{ok:true,result:{}};}
@@ -49,7 +51,7 @@ async function autonomousFixture(t,{sendError=false,busy=false,readError=false}=
  const advance=async ms=>{t.mock.timers.tick(ms);for(let i=0;i<100;i++)await Promise.resolve();};
  t.after(async()=>{await r.ui('pause');delete global.cindy;t.mock.timers.reset();});
  await r.ui('receive');
- return{r,advance,snapshot,get sends(){return sends},get reads(){return reads},get task(){return data.tasks[guid]},release(){hold=false}};
+ return{r,advance,snapshot,get data(){return data},get acks(){return acks},emit:()=>r.onMessage({type:'event',name:'node-notification',method:'inbox/event',params:{token:'ack-fixture',event:{id:'event',appId,guid,baseline:data.connection.baseline,eventAt:Date.now(),agentStartRequested:true}}}),get sends(){return sends},get reads(){return reads},get task(){return data.tasks[guid]},release(){hold=false}};
 }
 test('预约由插件计时器唤醒，无Host心跳或页面操作仍只派发一次',async t=>{
  const h=await autonomousFixture(t);await h.advance(9999);assert.equal(h.sends,0);
@@ -77,4 +79,13 @@ test('未知投递结果不被自主计时器重发',async t=>{
 test('读取失败按持久化重试时间自主恢复，不提前发送',async t=>{
  const h=await autonomousFixture(t,{readError:true});await h.advance(10000);assert.equal(h.sends,0);assert.equal(h.task.nextAttemptAt,Date.now()+60000);
  await h.advance(59999);assert.equal(h.reads,1);await h.advance(1);assert.equal(h.sends,1);
+});
+test('ACK后源读取失败按分钟恢复原事件，重复通知和心跳不重发',async t=>{
+ const h=await autonomousFixture(t,{eventOnly:true,readError:true});await h.emit();assert.equal(h.acks,1);assert.equal(h.reads,1);assert.equal(h.sends,0);
+ const event=Object.values(h.data.events)[0];assert.equal(event.pending,true);assert.equal(event.nextReadAt,Date.now()+60000);assert.equal(event.partnerId,'bot');assert.equal(event.readError,'NODE_TEMPORARY');
+ await h.emit();assert.equal(h.reads,1);await h.advance(59999);assert.equal(h.reads,1);await h.advance(1);assert.equal(h.sends,1);assert.equal(h.task.state,'delivered');assert.equal(Object.values(h.data.events)[0].pending,false);
+ await h.advance(180000);await h.emit();assert.equal(h.sends,1);
+});
+test('暂停取消待读取事件的自动恢复，保留事件及原基线',async t=>{
+ const h=await autonomousFixture(t,{eventOnly:true,readError:true});await h.emit();const event=structuredClone(Object.values(h.data.events)[0]);await h.r.ui('pause');await h.advance(120000);assert.equal(h.reads,1);assert.equal(h.sends,0);assert.deepEqual(Object.values(h.data.events)[0],event);
 });

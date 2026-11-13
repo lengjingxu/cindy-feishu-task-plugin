@@ -47,7 +47,9 @@ class Bridge {
     catch (error) {
       // A late notification for an already stopped, removed source must not
       // block recovery of unrelated tasks. Keep all other failures pending.
-      if (error.code !== "FEISHU_API_1470404" || this.state.tasks[e.guid]?.state !== "stopped") throw error;
+      if (error.code !== "FEISHU_API_1470404" || this.state.tasks[e.guid]?.state !== "stopped") {
+        const next=clone(this.state);next.events[eventKey].readError=error.code||'SOURCE_READ_FAILED';next.events[eventKey].nextReadAt=this.now()+60000;await this.save(next);throw error;
+      }
       const next = clone(this.state);
       next.events[eventKey].pending = false;
       next.events[eventKey].intake = "stopped_source_absent";
@@ -55,6 +57,7 @@ class Bridge {
       return clone(next.tasks[e.guid]);
     }
     const next = clone(this.state);
+    delete next.events[eventKey].readError;delete next.events[eventKey].nextReadAt;
     let t = next.tasks[e.guid];
     const ownCompletion = t?.outbox?.some(op => op.kind === "complete" && op.state === "attempted" && this.remote.matches(snapshot, op));
     if (t && !["done", "stopped"].includes(t.state) && (!snapshot.assigned || snapshot.deleted || (snapshot.done && !ownCompletion) || changed(t, snapshot))) { t.orphanedDelivery=Boolean(t.dispatch); t.state = "stopped"; t.generation++; }
@@ -83,6 +86,7 @@ class Bridge {
     if(!prior || !Number.isSafeInteger(e.eventAt) || e.eventAt>=(prior.eventAt||0))
       next.assignmentObservations[observationKey]={assigned:snapshot.assigned===true,observedAt,eventAt:e.eventAt||0};
     if(!t&&e.assigneesChanged&&!assignmentProven)next.events[eventKey].intake='assignment_unproven';
+    if(!t&&e.agentStartRequested)next.events[eventKey].startCheck={freshEvent,soleAppAssignee:snapshot.soleAppAssignee===true,agentStatus:snapshot.agentStatus??null,assigned:snapshot.assigned===true,done:snapshot.done===true,deleted:snapshot.deleted===true,startRequested};
     // Ordinary updates cannot import historical tasks.
     if (!t && ((e.isCreate && Number.isFinite(e.baseline) && snapshot.createdAt >= e.baseline) || assignmentProven || startRequested) && snapshot.assigned && !snapshot.done && !snapshot.deleted) {
       next.events[eventKey].intake=startRequested?'explicit_start':assignmentProven?'live_assignment':'created';
